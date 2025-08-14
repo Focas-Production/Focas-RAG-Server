@@ -1,0 +1,25 @@
+{
+  "name": "icai-rag-system",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@langchain/openai": "^0.6.3",
+    "@pinecone-database/pinecone": "^6.1.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "langchain": "^0.3.30",
+    "mongoose": "^8.17.0",
+    "multer": "^2.0.2",
+    "openai": "^5.12.0",
+    "pdf-parse": "^1.1.1",
+    "redis": "^5.8.0"
+  },
+  "description": ""
+}

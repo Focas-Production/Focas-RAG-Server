@@ -1,0 +1,56 @@
+services:
+  # The Node.js API Server
+  api-server:
+    build: ./api-server
+    ports:
+      - "5555:5555"
+    env_file:       # <--- ADD THIS
+      - ./.env      # <--- AND THIS
+    depends_on:
+      - mongo
+      - redis
+    volumes:
+      - ./api-server:/usr/src/app 
+      - /usr/src/app/node_modules
+    networks:
+      - rag-net
+
+  # The Python Background Worker
+  python-worker:
+    build: ./python-worker
+    env_file:       # <--- ADD THIS
+      - ./.env      # <--- AND THIS
+    depends_on:
+      - mongo
+      - redis
+    volumes:
+      - ./python-worker:/usr/src/app
+    networks:
+      - rag-net
+
+  # MongoDB Database
+  mongo:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - rag-net
+
+  # Redis Message Queue
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - rag-net
+
+# Define the network for services to communicate
+networks:
+  rag-net:
+    driver: bridge
+
+# Define the volume for persistent MongoDB data
+volumes:
+  mongo-data:
