@@ -11,6 +11,7 @@
   "dependencies": {
     "@langchain/openai": "^0.6.3",
     "@pinecone-database/pinecone": "^6.1.2",
+    "axios": "^1.11.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",

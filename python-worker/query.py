@@ -26,9 +26,9 @@ llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0, model_name="gpt-4
 prompt_template = PromptTemplate(
     input_variables=["context", "question"],
     template="""
-You are a CA Assistant helping students understand accounting concepts.
-Use the context from the ICAI material provided to answer the question accurately and in a step-by-step manner.
-If the context does not contain the answer, state that the information is not available in the provided documents.
+You are a CA Assistant helping students understand accounting and CA concepts.
+If the provided ICAI context contains the answer, use it and cite it.
+If the context does not contain the answer, answer from your own knowledge as a CA expert.
 
 Context:
 {context}
@@ -88,11 +88,21 @@ def get_answer(level, subject, query):
             print(f"🔍 Sample paperName: '{sample_doc.get('paperName', 'NOT_FOUND')}'")
             print(f"🔍 Sample chunkText length: {len(sample_doc.get('chunkText', ''))}")
         
+
         results = list(chunks_collection.aggregate(pipeline))
         print(f"🔍 Aggregation query returned: {len(results)} results")
 
         if not results:
-            return "❌ No relevant documents found for your query in the specified subject."
+            # No relevant ICAI material found, answer from LLM directly
+            print("⚠️ No relevant ICAI material found. Answering from general CA knowledge.")
+            # Use the LLM directly, not with a context-based prompt
+            try:
+                # For ChatOpenAI, use .invoke with a plain string
+                response = llm.invoke(query)
+                # For ChatOpenAI, response may be a message object
+                return response.content if hasattr(response, "content") else response
+            except Exception as e:
+                return f"❌ LLM error: {str(e)}"
 
         # --- ADDED FOR DEBUGGING ---
         # Print the sources that were found
@@ -108,7 +118,6 @@ def get_answer(level, subject, query):
         # 3. Run QA Chain
         chain = load_qa_chain(llm=llm, chain_type="stuff", prompt=prompt_template)
         result = chain.invoke({"input_documents": docs, "question": query})
-
         return result['output_text']
 
     except Exception as e:

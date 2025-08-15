@@ -20,15 +20,30 @@ async function getRagResponse(userMessage, filters = {}) {
         console.log(`  Step 2: Found ${sourceChunks.length} relevant source chunks from MongoDB.`);
 
         if (sourceChunks.length === 0) {
-            return { aiAnswer: "I'm sorry, I couldn't find any relevant information to answer your question.", sourceChunks: [] };
+            // No ICAI context found, answer from LLM general CA knowledge with system prompt
+            console.log("  No ICAI context found. Answering from general CA knowledge with system prompt.");
+            const systemPrompt = "You are a CA Assistant. Always answer the user's question using your own CA knowledge. Never say 'refer to ICAI website', 'I do not have that information', or similar. If you do not know, make your best attempt based on your training. Be as helpful and detailed as possible.";
+            const completion = await openai.chat.completions.create({
+                model: "gpt-4o",
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userMessage }
+                ],
+                temperature: 0.2,
+            });
+            const aiAnswer = completion.choices[0].message.content;
+            return { aiAnswer, sourceChunks: [] };
         }
 
+        const systemPrompt = "You are a CA Assistant. Always answer the user's question using your own CA knowledge if the context does not contain the answer. Never say 'refer to ICAI website', 'I do not have that information', or similar. If you do not know, make your best attempt based on your training. Be as helpful and detailed as possible.";
         const context = sourceChunks.map(chunk => chunk.chunkText || chunk.text).join('\n---\n');
-        const prompt = `Based ONLY on the following context from the ICAI syllabus, answer the user's question concisely. Context:\n${context}\n\nQuestion: ${userMessage}`;
-        
+        const prompt = `Context:\n${context}\n\nQuestion: ${userMessage}`;
         const completion = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [{ role: "user", content: prompt }],
+            model: "gpt-4o",
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: prompt }
+            ],
             temperature: 0.2,
         });
         const aiAnswer = completion.choices[0].message.content;
