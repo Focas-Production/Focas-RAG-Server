@@ -115,6 +115,8 @@ def get_answer(level, subject, query):
         # Convert results to LangChain Documents
         docs = [Document(page_content=res['chunkText']) for res in results]
 
+        print(prompt_template,"===================================")
+
         # 3. Run QA Chain
         chain = load_qa_chain(llm=llm, chain_type="stuff", prompt=prompt_template)
         result = chain.invoke({"input_documents": docs, "question": query})
