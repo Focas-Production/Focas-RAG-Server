@@ -20,3 +20,5 @@ pydub
 pymongo
 streamlit
 pytesseract
+flask
+flask-cors

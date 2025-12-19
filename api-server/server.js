@@ -124,6 +124,8 @@ dotenv.config();
 // Import routes
 const ingestionRoutes = require('./routes/ingestion.routes');
 const chatRoutes = require('./routes/chat.routes.js')
+const subjectDataRoutes = require('./routes/subjectData.routes.js');
+const mcqRoutes = require('./routes/mcq.routes.js');
 
 const app = express();
 const PORT = process.env.PORT || 5555;
@@ -244,6 +246,8 @@ app.get('/', (req, res) => {
 
 app.use('/api/ingestion', ingestionRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/data', subjectDataRoutes);
+app.use('/api/mcq', mcqRoutes);
 
 // Start Server
 app.listen(PORT, () => {
