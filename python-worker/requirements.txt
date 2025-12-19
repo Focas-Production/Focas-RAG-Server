@@ -1,24 +1,40 @@
+# ================= Core Utilities =================
+python-dotenv
 redis
 pymongo
-python-dotenv
-openai
-tiktoken
-langchain
-langchain-openai
-langchain-community
-langchain-huggingface 
+
+# ================= OpenAI & LangChain (LOCKED) =================
+openai>=1.24,<2.0
+tiktoken>=0.5,<1.0
+
+langchain==0.1.16
+langchain-core==0.1.46
+langchain-openai==0.1.6
+langchain-community==0.0.34
+langsmith==0.1.38
+
+# ================= Embeddings / NLP =================
 sentence-transformers
-PyMuPDF 
-PyCryptodome
+
+# ================= PDF / Document Processing =================
+PyMuPDF
 pypdf
 google-cloud-documentai
-opencv-python
-numpy
-ffmpeg
+pytesseract
+
+# ================= Crypto =================
+pycryptodome
+
+# ================= Audio / Video =================
 SpeechRecognition
 pydub
-pymongo
-streamlit
-pytesseract
+ffmpeg-python
+
+# ================= CV / Image =================
+numpy<2
+opencv-python<4.12
+
+# ================= Backend / UI =================
 flask
 flask-cors
+streamlit

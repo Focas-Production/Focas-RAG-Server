@@ -3,7 +3,7 @@ const mcqService = require('../services/mcq.service');
 /**
  * Proxy endpoint to generate MCQs via the Python worker.
  * Simply forwards the request body and returns the worker's response.
- */
+ *  */
 const generateMcq = async (req, res) => {
   try {
     const mcqResponse = await mcqService.generateMcq(req.body);
