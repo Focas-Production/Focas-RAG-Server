@@ -19,7 +19,7 @@ services:
   python-worker:
     build: ./python-worker
     ports:
-      - "8501:8501"
+      - "5001:5001"
     env_file:      
       - ./.env     
     depends_on:
