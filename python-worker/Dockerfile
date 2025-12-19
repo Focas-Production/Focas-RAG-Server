@@ -17,4 +17,4 @@ RUN pip install --timeout=900 --no-cache-dir -r requirements.txt
 COPY . .
 
 # Define the command to run your worker in unbuffered mode
-CMD [ "python", "-u", "main.py" ]
+CMD [ "python", "-u", "api.py" ]
