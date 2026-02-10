@@ -15,7 +15,7 @@ from mcq_prompts import (
     get_system_prompt, 
     MAX_TOKENS, 
     MAX_QUESTIONS,
-    randomize_correct_answer
+    normalize_options_order
 )
 
 load_dotenv()
@@ -389,9 +389,9 @@ def generate_mcq(level, subject, chapter_name, difficulty="very_hard", unit_name
         print("❌ MCQ validation failed - missing required fields")
         return None
     
-    # Randomize correct answer
-    print(f"🔀 Randomizing answer options...")
-    mcq = randomize_correct_answer(mcq)
+    # Normalize options order/format
+    print("🔤 Normalizing answer options to A-D...")
+    mcq = normalize_options_order(mcq)
     
     # Add metadata
     mcq["question_number"] = question_number

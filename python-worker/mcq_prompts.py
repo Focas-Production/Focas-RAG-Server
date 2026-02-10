@@ -5,6 +5,7 @@ Includes VERY-HARD difficulty level with complex scenarios
 """
 
 import random
+import re
 
 MAX_QUESTIONS = 50
 MAX_TOKENS = 3000  # Increased for complex MCQ generation
@@ -26,7 +27,7 @@ QUALITY STANDARDS:
 - Correct answer is NOT obvious
 - Requires 2-5 minutes of careful analysis
 - Do NOT indicate which is correct
-- Randomize all options equally
+- Keep options labeled A-D in order
 - Test understanding of edge cases and exceptions"""
 
 # ===== DIFFICULTY LEVEL DESCRIPTIONS =====
@@ -401,7 +402,7 @@ RESPONSE FORMAT - JSON ONLY (NO MARKDOWN):
   "difficulty": "{difficulty}",
   "question_type": "{question_type}",
   "question": "SPECIFIC, DETAILED question with numbers, scenario, and decision framework [{diff_info['name']} LEVEL]",
-  "options": ["OPTION A: [specific amount/scenario]", "OPTION B: [calculation with values]", "OPTION C: [plausible misconception]", "OPTION D: [CORRECT - requires synthesis]"],
+  "options": ["A: [specific amount/scenario]", "B: [calculation with values]", "C: [plausible misconception]", "D: [CORRECT - requires synthesis]"],
   "correct_answer": "[A/B/C/D]",
   "explanation": "DETAILED step-by-step solution: 
      1. [Identify key concepts from content]
@@ -423,103 +424,62 @@ def get_system_prompt():
     """Get enhanced system prompt"""
     return SYSTEM_PROMPT
 
-def randomize_correct_answer(mcq):
+def normalize_options_order(mcq):
     """
-    Randomize correct answer position and options.
-
-    Behaviour:
-    - Uses the correct answer coming from the LLM (mcq["correct_answer"])
-    - Correct option can end up in A, B, C, or D (pure random)
-    - Options are shuffled randomly
-    - Updates mcq["correct_answer"] to the new letter (A/B/C/D)
-    - If model didn't set correct_answer properly, assumes last option (D) is correct
-      (consistent with your prompt where D is the correct one)
+    Normalize options to A/B/C/D order and remove the "OPTION " prefix.
+    Also ensures correct_answer is a clean letter.
     """
     if "options" not in mcq or len(mcq["options"]) != 4:
         return mcq
 
-    options = mcq["options"].copy()
-    raw_correct = str(mcq.get("correct_answer", "")).strip().upper()
+    label_pattern = re.compile(
+        r"^\s*(?:OPTION\s+)?([A-D])\s*[\)\:\.\-]\s*(.+)$",
+        re.IGNORECASE
+    )
 
-    correct_idx = None
+    options = mcq["options"]
+    labeled = {}
+    unlabeled = []
 
-    # 1️⃣ Case 1: model returns clean "A"/"B"/"C"/"D"
-    if raw_correct in {"A", "B", "C", "D"}:
-        correct_idx = ord(raw_correct) - ord("A")
-
-    # 2️⃣ Case 2: "OPTION A", "Option B", etc.
-    elif raw_correct.startswith("OPTION "):
-        last_part = raw_correct.split()[-1]
-        if last_part in {"A", "B", "C", "D"}:
-            correct_idx = ord(last_part) - ord("A")
-
-    # 3️⃣ Case 3: model might have returned the actual option text as correct_answer
-    if correct_idx is None and raw_correct:
-        for i, opt in enumerate(options):
-            if raw_correct == str(opt).strip().upper():
-                correct_idx = i
-                break
-
-    # 4️⃣ Fallback: assume last option (D) is correct as per your template
-    if correct_idx is None or not (0 <= correct_idx < 4):
-        correct_idx = 3  # index 3 = D
-
-    # Attach a flag to each option indicating whether it's the correct one
-    options_with_flag = []
-    for i, opt_text in enumerate(options):
-        is_correct = (i == correct_idx)
-        options_with_flag.append((opt_text, is_correct))
-
-    # Shuffle options WITH their flags
-    random.shuffle(options_with_flag)
-
-    # Rebuild options list and find new correct index
-    new_options = []
-    new_correct_idx = None
-    for idx, (opt_text, is_correct) in enumerate(options_with_flag):
-        new_options.append(opt_text)
-        if is_correct:
-            new_correct_idx = idx
-
-    # Safety fallback (should not happen, but just in case)
-    if new_correct_idx is None:
-        new_correct_idx = 0
-
-    # Map new correct index back to letter A/B/C/D
-    new_correct_letter = chr(ord("A") + new_correct_idx)
-
-    mcq["options"] = new_options
-    mcq["correct_answer"] = new_correct_letter
-
-    return mcq
-
-    """Randomize correct answer position"""
-    if "options" not in mcq or len(mcq["options"]) != 4:
-        return mcq
-    
-    # Find correct answer first
-    correct_answer = mcq.get("correct_answer", "D")
-    options = mcq["options"].copy()
-    
-    # Shuffle options
-    random.shuffle(options)
-    
-    # Find new position of correct answer
-    # Assuming first option in original list is correct
-    correct_option = options[0] if len(options) > 0 else ""
-    
-    # Create mapping for new position
-    if len(options) == 4:
-        for i, opt in enumerate(options):
-            if opt == correct_option:
-                correct_letter = chr(65 + i)
-                break
+    for opt in options:
+        text = str(opt).strip()
+        match = label_pattern.match(text)
+        if match:
+            label = match.group(1).upper()
+            body = match.group(2).strip()
+            labeled[label] = body
         else:
-            correct_letter = "A"
-    else:
-        correct_letter = "A"
-    
-    mcq["options"] = options
-    mcq["correct_answer"] = correct_letter
-    
+            unlabeled.append(text)
+
+    ordered = []
+    for label in ["A", "B", "C", "D"]:
+        if label in labeled:
+            body = labeled[label]
+        else:
+            body = unlabeled.pop(0) if unlabeled else ""
+        ordered.append(f"{label}: {body}".strip())
+
+    mcq["options"] = ordered
+
+    raw_correct = str(mcq.get("correct_answer", "")).strip().upper()
+    if raw_correct.startswith("OPTION "):
+        raw_correct = raw_correct.replace("OPTION ", "", 1).strip()
+
+    if raw_correct in {"A", "B", "C", "D"}:
+        mcq["correct_answer"] = raw_correct
+        return mcq
+
+    match = re.match(r"^\s*([A-D])\s*[\)\:\.\-]?", raw_correct)
+    if match:
+        mcq["correct_answer"] = match.group(1)
+        return mcq
+
+    cleaned_correct = raw_correct
+    for i, opt in enumerate(ordered):
+        opt_body = re.sub(r"^[A-D]\s*[\)\:\.\-]\s*", "", opt, flags=re.IGNORECASE).strip().upper()
+        if cleaned_correct == opt_body:
+            mcq["correct_answer"] = chr(ord("A") + i)
+            return mcq
+
+    mcq["correct_answer"] = "A"
     return mcq
