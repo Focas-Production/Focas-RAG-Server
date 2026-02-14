@@ -8,27 +8,12 @@ import random
 import re
 
 MAX_QUESTIONS = 50
-MAX_TOKENS = 3000  # Increased for complex MCQ generation
-
-SYSTEM_PROMPT = """You are an elite ICAI exam question setter with 30+ years experience setting CA Final papers.
-Generate EXTREMELY CHALLENGING, AUTHENTIC CA exam MCQs that test deep expertise.
-
-CRITICAL REQUIREMENTS FOR PRODUCTION:
-1. Based ONLY on provided content - NO external knowledge
-2. Multiple concepts integrated (not single-topic)
-3. Realistic Indian business scenarios with specific numbers
-4. Requires CRITICAL THINKING and APPLICATION, not just recall
-5. Include numerical calculations, policy implications, or complex judgment
-6. Each wrong answer must be plausible (common misconception)
-7. Suitable for CA students preparing for actual exams
-
-QUALITY STANDARDS:
-- Provide 4 DISTINCT, PLAUSIBLE options
-- Correct answer is NOT obvious
-- Requires 2-5 minutes of careful analysis
-- Do NOT indicate which is correct
-- Keep options labeled A-D in order
-- Test understanding of edge cases and exceptions"""
+SYSTEM_PROMPT = """You are an ICAI exam question setter.
+Generate authentic, high-quality CA MCQs.
+Use ONLY provided content. No external facts.
+Use realistic Indian business context with rupee amounts.
+Integrate multiple concepts, require analysis, and include plausible distractors.
+Return JSON only."""
 
 # ===== DIFFICULTY LEVEL DESCRIPTIONS =====
 
@@ -38,10 +23,8 @@ DIFFICULTY_DESCRIPTIONS = {
         "description": "Tests basic concept recall and simple application",
         "characteristics": [
             "Single concept",
-            "Straightforward scenario",
-            "0-1 calculation",
-            "Direct textbook reference",
-            "Answer is relatively obvious to those who studied"
+            "Simple scenario",
+            "0-1 calculation"
         ]
     },
     "medium": {
@@ -49,10 +32,8 @@ DIFFICULTY_DESCRIPTIONS = {
         "description": "Tests application of concepts with some analysis",
         "characteristics": [
             "2-3 concepts combined",
-            "Real business scenario",
-            "2-3 calculations or logical steps",
-            "Requires understanding, not just recall",
-            "Some judgment/interpretation needed"
+            "Realistic scenario",
+            "2-3 calculation steps"
         ]
     },
     "hard": {
@@ -60,26 +41,17 @@ DIFFICULTY_DESCRIPTIONS = {
         "description": "Tests deep understanding with complex scenarios",
         "characteristics": [
             "3-4 concepts integrated",
-            "Complex Indian business scenario",
-            "4-6 calculations or decision factors",
-            "Requires expert judgment and analysis",
-            "Tests exception cases and edge scenarios",
-            "Combines theory with practical implications"
+            "Complex scenario",
+            "4-6 calculation steps"
         ]
     },
     "very_hard": {
         "name": "VERY-HARD",
         "description": "Tests mastery level understanding - CA Final exam standard",
         "characteristics": [
-            "4-5+ concepts deeply integrated",
-            "Highly realistic, complex Indian business scenario with multiple variables",
-            "6-10+ calculation steps or decision factors",
-            "Requires EXPERT judgment, critical analysis, and synthesis",
-            "Tests understanding of exceptions, boundary cases, policy nuances",
-            "Combines theory, practice, policy, and ethical considerations",
-            "Question that senior CAs debate in practice",
-            "Separates good CA students from excellent ones",
-            "Requires knowing what most candidates DON'T know"
+            "4-5+ concepts integrated",
+            "Highly complex scenario",
+            "6-10+ decision factors"
         ]
     }
 }
@@ -274,18 +246,12 @@ def get_difficulty_instruction(difficulty, subject):
     difficulty_lower = difficulty.lower()
     
     if difficulty_lower == "very_hard":
-        return """VERY-HARD LEVEL - CA FINAL EXAMINATION STANDARD:
-- This question SEPARATES good CAs from EXCELLENT CAs
+        return """VERY-HARD LEVEL - CA FINAL STANDARD:
 - 4-5+ interconnected concepts from the content
-- Complex, realistic Indian business scenario (NOT simplified)
-- 6-10+ calculation steps or decision factors required
-- Requires EXPERT-level judgment and critical analysis
-- Tests understanding of edge cases, exceptions, policy nuances
-- Each wrong answer must be a common mistake made by 80% of candidates
-- Question that practicing CAs would debate in technical forums
-- Solution requires deep synthesis of multiple principles
-- Include specific numerical examples from Indian context
-- NO generic/theoretical answers - practical expertise needed"""
+- Complex Indian business scenario with multiple variables
+- 6-10+ decision factors or calculations
+- Requires expert judgment and edge-case reasoning
+- Distractors are common expert-level misconceptions"""
     
     instructions = {
         "easy": "Tests BASIC concept understanding. Single concept. Simple scenario. 1-2 calculations if any.",
@@ -317,7 +283,7 @@ def select_question_type(subject, difficulty, previous_types=None, chapter_name=
     return selected
 
 def get_prompt(difficulty, context, chapter_number, chapter_name, unit_number, unit_name, subject_context, question_count=1, topic_name=""):
-    """Generate POWERFUL subject-specific, topic-aware prompt with extreme quality standards"""
+    """Generate compact, high-precision prompt for MCQ generation"""
     
     difficulty_lower = difficulty.lower()
     subject = subject_context.get("name", "").lower().replace(" ", "_")
@@ -331,92 +297,43 @@ def get_prompt(difficulty, context, chapter_number, chapter_name, unit_number, u
     # Get template
     template = config["question_templates"].get(question_type, "Default: [{scenario}]. Correct answer is?")
     
-    # Get examples
-    examples = config["examples"]
-    
     # Get difficulty description
     diff_info = DIFFICULTY_DESCRIPTIONS.get(difficulty_lower, DIFFICULTY_DESCRIPTIONS["hard"])
     
-    # Build POWERFUL prompt
-    prompt = f"""GENERATE PRODUCTION-GRADE CA EXAM MCQ - {diff_info['name']} LEVEL
-{'='*80}
+    prompt = f"""GENERATE CA EXAM MCQ - {diff_info['name']} LEVEL
 
-CONTENT TO BASE QUESTION ON:
+CONTENT:
 Chapter: {chapter_number} - {chapter_name}
 Unit: {unit_number} - {unit_name}
 Topic: {topic_name}
-Difficulty Level: {diff_info['name']}
 
-DIFFICULTY LEVEL CHARACTERISTICS:
-{chr(10).join('• ' + char for char in diff_info['characteristics'])}
+DIFFICULTY TARGET:
+{get_difficulty_instruction(difficulty_lower, subject)}
+Key traits: {', '.join(diff_info['characteristics'])}
 
-CONTENT PROVIDED:
+SOURCE CONTENT (use only this):
 {context}
 
-{'='*80}
-QUESTION GENERATION REQUIREMENTS:
-{'='*80}
+REQUIREMENTS:
+- Integrate multiple concepts from the content.
+- Use a realistic Indian business scenario with specific rupee amounts.
+- Include 4 plausible options labeled A-D.
+- Correct answer not obvious; requires analysis.
+- No external knowledge.
+- Explanation: concise but complete (100-160 words).
 
-1. DIFFICULTY CALIBRATION FOR {diff_info['name']}:
-{get_difficulty_instruction(difficulty_lower, subject)}
+QUESTION TEMPLATE:
+{template}
 
-2. QUESTION QUALITY STANDARDS:
-   ✓ Based ONLY on provided content - NO external knowledge
-   ✓ Integrates {2 if difficulty_lower == 'easy' else 3 if difficulty_lower == 'medium' else 4 if difficulty_lower == 'hard' else 5}+ concepts from content
-   ✓ Realistic Indian business scenario with SPECIFIC numbers/amounts
-   ✓ Requires {'recall' if difficulty_lower == 'easy' else 'understanding + application' if difficulty_lower == 'medium' else 'deep analysis + synthesis' if difficulty_lower == 'hard' else 'expert judgment + critical thinking + synthesis'}
-   ✓ Test takers need {'basic knowledge' if difficulty_lower == 'easy' else 'intermediate understanding' if difficulty_lower == 'medium' else 'advanced expertise' if difficulty_lower == 'hard' else '5+ years professional experience'}
-   ✓ Each wrong answer is a PLAUSIBLE misconception
-   ✓ Correct answer is NOT obvious (requires {'0-1' if difficulty_lower == 'easy' else '2-3' if difficulty_lower == 'medium' else '4-6' if difficulty_lower == 'hard' else '6-10+'}+ minutes analysis)
-
-3. SCENARIO CONSTRUCTION ({diff_info['name']}):
-   • Use these real Indian companies/contexts: {', '.join(random.sample(examples.get('companies', ['Company A', 'Company B', 'Company C']), min(3, len(examples.get('companies', [])))))}
-   • Include specific amounts: {', '.join(random.sample(examples.get('price_ranges', ['Rs. 100', 'Rs. 1000']), min(3, len(examples.get('price_ranges', [])))))}
-   • Market context: {', '.join(random.sample(examples.get('markets', ['Market A', 'Market B']), min(2, len(examples.get('markets', [])))))}
-   • Realistic timeframe and business constraints
-   {'• Include policy implications or regulatory considerations' if difficulty_lower in ['hard', 'very_hard'] else ''}
-
-4. QUESTION TEMPLATE TO FOLLOW:
-   {template}
-
-5. OPTION DESIGN:
-   • A: {['Obviously wrong' if difficulty_lower == 'easy' else 'Related but incorrect concept' if difficulty_lower == 'medium' else 'Common expert misconception' if difficulty_lower == 'hard' else 'Seems correct but misses critical nuance']}
-   • B: {['Directly wrong' if difficulty_lower == 'easy' else 'Partially correct concept' if difficulty_lower == 'medium' else 'Correct on surface but wrong logic' if difficulty_lower == 'hard' else 'Correct calculation but wrong interpretation']}
-   • C: {['Clearly incorrect' if difficulty_lower == 'easy' else 'Wrong interpretation of concept' if difficulty_lower == 'medium' else 'Correct concept but wrong application' if difficulty_lower == 'hard' else '70% correct - MOST candidates choose this']}
-   • D: {['CORRECT ANSWER - requires analysis' if difficulty_lower == 'easy' else 'CORRECT ANSWER - requires application' if difficulty_lower == 'medium' else 'CORRECT ANSWER - requires synthesis' if difficulty_lower == 'hard' else 'CORRECT ANSWER - only experts see this']}
-
-{'CRITICAL FOR VERY-HARD:' if difficulty_lower == 'very_hard' else ''}
-{'- Question should appear on CA Final papers' if difficulty_lower == 'very_hard' else ''}
-{'- Separates 95% of candidates from top 5%' if difficulty_lower == 'very_hard' else ''}
-{'- Requires knowing what 90% of CAs DONT know' if difficulty_lower == 'very_hard' else ''}
-{'- Include edge case or policy nuance' if difficulty_lower == 'very_hard' else ''}
-
-{'='*80}
-RESPONSE FORMAT - JSON ONLY (NO MARKDOWN):
+RESPONSE JSON ONLY:
 {{
-  "chapter_number": {chapter_number},
-  "chapter_name": "{chapter_name}",
-  "unit_number": {unit_number},
-  "unit_name": "{unit_name}",
-  "topic_name": "{topic_name}",
   "difficulty": "{difficulty}",
   "question_type": "{question_type}",
-  "question": "SPECIFIC, DETAILED question with numbers, scenario, and decision framework [{diff_info['name']} LEVEL]",
-  "options": ["A: [specific amount/scenario]", "B: [calculation with values]", "C: [plausible misconception]", "D: [CORRECT - requires synthesis]"],
-  "correct_answer": "[A/B/C/D]",
-  "explanation": "DETAILED step-by-step solution: 
-     1. [Identify key concepts from content]
-     2. [Apply relevant principles]
-     3. [Perform calculations/analysis]
-     4. [Explain why each wrong answer is incorrect - typical student mistakes]
-     5. [Conclusion with policy/practical implications]",
-  "difficulty_justification": "Why this is {diff_info['name']} level: [Explain the complexity factors]",
-  "keywords_from_content": ["keyword1", "keyword2", "keyword3"]
-}}
-
-{'='*80}
-NOW GENERATE - Create an EXCEPTIONAL {diff_info['name']} level MCQ!
-{'='*80}"""
+  "question": "Detailed question with numbers and scenario",
+  "options": ["A: ...", "B: ...", "C: ...", "D: ..."],
+  "correct_answer": "A",
+  "explanation": "Step-by-step reasoning and why others are wrong."
+}}"""
 
     return prompt
 

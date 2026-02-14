@@ -11,9 +11,7 @@ import random
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from mcq_prompts import (
-    get_prompt, 
-    get_system_prompt, 
-    MAX_TOKENS, 
+    get_prompt,
     MAX_QUESTIONS,
     normalize_options_order
 )
@@ -26,36 +24,47 @@ if not OPENAI_API_KEY or not MONGO_URI:
     raise ValueError("Missing OPENAI_API_KEY or MONGO_URI in environment")
 
 # ===== SUBJECT-SPECIFIC LLM CONFIGURATIONS =====
+DEFAULT_MAX_TOKENS = int(os.getenv("MCQ_MAX_OUTPUT_TOKENS", "900"))
+DEFAULT_CONTEXT_TOKENS = int(os.getenv("MCQ_CONTEXT_TOKENS", "6000"))
+DEFAULT_MAX_CHUNKS = int(os.getenv("MCQ_MAX_CHUNKS", "10"))
+DEFAULT_COST_PER_1K_INPUT = float(os.getenv("MCQ_COST_PER_1K_INPUT", "0"))
+DEFAULT_COST_PER_1K_OUTPUT = float(os.getenv("MCQ_COST_PER_1K_OUTPUT", "0"))
+
+# Optional built-in pricing hints (override via env for accuracy)
+MODEL_PRICING_PER_1K = {
+    "gpt-4-turbo": (DEFAULT_COST_PER_1K_INPUT, DEFAULT_COST_PER_1K_OUTPUT),
+}
+
 SUBJECT_CONFIG = {
     "business_economics": {
         "temperature": 0.7,  # Lower for harder questions - more focused
         "model": "gpt-4-turbo",
-        "max_tokens": 2500,
+        "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "accounting": {
         "temperature": 0.65,
         "model": "gpt-4-turbo",
-        "max_tokens": 2500,
+        "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "auditing": {
         "temperature": 0.68,
         "model": "gpt-4-turbo",
-        "max_tokens": 2500,
+        "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "taxation": {
         "temperature": 0.7,
         "model": "gpt-4-turbo",
-        "max_tokens": 2500,
+        "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "law": {
         "temperature": 0.68,
         "model": "gpt-4-turbo",
-        "max_tokens": 2500,
+        "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "cost_accounting": {
         "temperature": 0.7,
         "model": "gpt-4-turbo",
-        "max_tokens": 2500,
+        "max_tokens": DEFAULT_MAX_TOKENS,
     }
 }
 
@@ -72,6 +81,34 @@ def get_llm_for_subject(subject):
     )
     
     return llm, config
+
+def extract_token_usage(response):
+    """Extract token usage from LangChain response if available."""
+    try:
+        meta = getattr(response, "response_metadata", None) or {}
+        usage = meta.get("token_usage") or meta.get("usage") or {}
+        if usage:
+            return {
+                "input": usage.get("prompt_tokens") or usage.get("input_tokens"),
+                "output": usage.get("completion_tokens") or usage.get("output_tokens"),
+                "total": usage.get("total_tokens"),
+            }
+    except Exception:
+        pass
+    return None
+
+def estimate_cost(model_name, token_usage):
+    """Estimate cost using configured per-1K rates."""
+    if not token_usage:
+        return None
+    input_tokens = token_usage.get("input") or 0
+    output_tokens = token_usage.get("output") or 0
+    rates = MODEL_PRICING_PER_1K.get(model_name, (0, 0))
+    in_rate, out_rate = rates
+    if in_rate == 0 and out_rate == 0:
+        return None
+    cost = (input_tokens / 1000.0) * in_rate + (output_tokens / 1000.0) * out_rate
+    return cost
 
 def get_all_topics(level, subject, chapter_name, unit_name=None):
     """
@@ -164,8 +201,8 @@ def select_best_topic_for_mcq(topics_list, exclude_topics=None, prefer_complex=T
 
 def fetch_topic_chunks_optimized(level, subject, chapter_name, unit_name, topic_name):
     """
-    Fetch ALL chunks for a specific topic for comprehensive MCQ generation.
-    This ensures maximum content is available for complex questions.
+    Fetch chunks for a specific topic with a strict token budget.
+    Ensures broad coverage while keeping cost under control.
     
     Args:
         topic_name: The topic_name to fetch
@@ -210,18 +247,42 @@ def fetch_topic_chunks_optimized(level, subject, chapter_name, unit_name, topic_
             "subject": subject,
             "total_chunks": len(chunks)
         }
-        
-        # Combine all chunk texts in order
-        combined_text = "\n\n".join([chunk.get("text", "") for chunk in chunks])
-        
-        # Check size
-        text_length = len(combined_text)
-        token_estimate = text_length / 4
-        
+
+        def estimate_tokens(text):
+            return max(1, int(len(text) / 4))
+
+        # Build per-chunk token estimates
+        chunk_texts = [chunk.get("text", "") for chunk in chunks]
+        chunk_tokens = [estimate_tokens(t) for t in chunk_texts]
+        total_tokens = sum(chunk_tokens)
+
+        # If within budget, keep all
+        if total_tokens <= DEFAULT_CONTEXT_TOKENS:
+            selected_texts = chunk_texts
+        else:
+            # Select evenly spaced chunks to preserve coverage
+            avg_tokens = max(1, int(total_tokens / max(1, len(chunks))))
+            target_count = max(4, min(DEFAULT_MAX_CHUNKS, int(DEFAULT_CONTEXT_TOKENS / avg_tokens)))
+            target_count = min(len(chunks), target_count)
+            step = max(1, int(len(chunks) / target_count))
+
+            indices = list(range(0, len(chunks), step))
+            if indices[-1] != len(chunks) - 1:
+                indices.append(len(chunks) - 1)
+            indices = indices[:target_count]
+
+            selected_texts = [chunk_texts[i] for i in indices]
+
+            # Trim further if still above budget
+            while sum(estimate_tokens(t) for t in selected_texts) > DEFAULT_CONTEXT_TOKENS and len(selected_texts) > 4:
+                selected_texts.pop()
+
+        combined_text = "\n\n".join(selected_texts)
+
         print(f"✅ Fetched {len(chunks)} chunks for topic")
-        print(f"   Text size: {text_length} characters (~{int(token_estimate)} tokens)")
-        print(f"   Safe for LLM: {'✅ YES' if token_estimate < 25000 else '⚠️ LARGE but OK'}")
-        
+        print(f"   Selected: {len(selected_texts)} chunks (budget ~{DEFAULT_CONTEXT_TOKENS} tokens)")
+        print(f"   Input tokens (est.): {estimate_tokens(combined_text)}")
+
         return combined_text, metadata
         
     except Exception as e:
@@ -364,13 +425,24 @@ def generate_mcq(level, subject, chapter_name, difficulty="very_hard", unit_name
         topic_name=metadata.get("topic_name", "")
     )
     
-    system_prompt = get_system_prompt()
-    
     # Call LLM
     print(f"\n⏳ Generating {difficulty.upper()} MCQ (this may take 30-60 seconds)...")
     try:
         response = llm.invoke(prompt)
         response_text = response.content if hasattr(response, "content") else str(response)
+
+        # Token usage + approximate cost logging
+        usage = extract_token_usage(response)
+        if usage:
+            model_name = config.get("model", "unknown")
+            print(f"📊 Token usage: input={usage.get('input')}, output={usage.get('output')}, total={usage.get('total')}")
+            cost = estimate_cost(model_name, usage)
+            if cost is not None:
+                print(f"💰 Approx cost ({model_name}): ${cost:.4f}")
+            else:
+                print("💰 Approx cost: set MCQ_COST_PER_1K_INPUT and MCQ_COST_PER_1K_OUTPUT to enable")
+        else:
+            print("📊 Token usage: unavailable from provider")
     except Exception as e:
         print(f"❌ LLM Error: {e}")
         return None
