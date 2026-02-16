@@ -4,7 +4,7 @@ const Icaichunk = require('../models/icaiChunk.schema');
 
 // Initialize OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const embeddings = new OpenAIEmbeddings({ openAIApiKey: process.env.OPENAI_API_KEY, model: "text-embedding-ada-002" });
+const embeddings = new OpenAIEmbeddings({ openAIApiKey: process.env.OPENAI_API_KEY, model: "text-embedding-3-small" });
 
 async function getRagResponse(userMessage, filters = {}) {
     console.log(`[RAG Service] Getting response for: "${userMessage}" with filters:`, filters);
