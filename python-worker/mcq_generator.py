@@ -12,8 +12,10 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from mcq_prompts import (
     get_prompt,
+    get_case_scenario_prompt,
     MAX_QUESTIONS,
-    normalize_options_order
+    normalize_options_order,
+    normalize_subject_key,
 )
 
 load_dotenv()
@@ -30,14 +32,18 @@ DEFAULT_MAX_CHUNKS = int(os.getenv("MCQ_MAX_CHUNKS", "10"))
 DEFAULT_COST_PER_1K_INPUT = float(os.getenv("MCQ_COST_PER_1K_INPUT", "0"))
 DEFAULT_COST_PER_1K_OUTPUT = float(os.getenv("MCQ_COST_PER_1K_OUTPUT", "0"))
 
+# Case-scenario generation needs a larger output budget (narrative + N questions)
+CASE_SCENARIO_MAX_TOKENS = int(os.getenv("MCQ_CASE_SCENARIO_MAX_TOKENS", "4000"))
+
 # Optional built-in pricing hints (override via env for accuracy)
 MODEL_PRICING_PER_1K = {
     "gpt-4-turbo": (DEFAULT_COST_PER_1K_INPUT, DEFAULT_COST_PER_1K_OUTPUT),
 }
 
 SUBJECT_CONFIG = {
+    # ── Generic fallback keys (kept for backward compatibility) ────────────────
     "business_economics": {
-        "temperature": 0.7,  # Lower for harder questions - more focused
+        "temperature": 0.7,
         "model": "gpt-4-turbo",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
@@ -65,12 +71,89 @@ SUBJECT_CONFIG = {
         "temperature": 0.7,
         "model": "gpt-4-turbo",
         "max_tokens": DEFAULT_MAX_TOKENS,
-    }
+    },
+
+    # ── Foundation ─────────────────────────────────────────────────────────────
+    # business_economics already covered by generic key above
+    "business_law": {
+        "temperature": 0.65,
+        "model": "gpt-4-turbo",
+        "max_tokens": DEFAULT_MAX_TOKENS,
+    },
+    "accounting_foundation": {
+        "temperature": 0.63,
+        "model": "gpt-4-turbo",
+        "max_tokens": DEFAULT_MAX_TOKENS,
+    },
+
+    # ── Intermediate ───────────────────────────────────────────────────────────
+    "advanced_accounts": {
+        "temperature": 0.65,
+        "model": "gpt-4-turbo",
+        "max_tokens": DEFAULT_MAX_TOKENS,
+    },
+    "auditing_ethics": {
+        "temperature": 0.67,
+        "model": "gpt-4-turbo",
+        "max_tokens": DEFAULT_MAX_TOKENS,
+    },
+    "corporate_laws": {
+        "temperature": 0.65,
+        "model": "gpt-4-turbo",
+        "max_tokens": DEFAULT_MAX_TOKENS,
+    },
+    "cost_management_accounting": {
+        "temperature": 0.68,
+        "model": "gpt-4-turbo",
+        "max_tokens": DEFAULT_MAX_TOKENS,
+    },
+    "financial_management": {
+        "temperature": 0.68,
+        "model": "gpt-4-turbo",
+        "max_tokens": DEFAULT_MAX_TOKENS,
+    },
+    "indirect_tax": {
+        "temperature": 0.67,
+        "model": "gpt-4-turbo",
+        "max_tokens": DEFAULT_MAX_TOKENS,
+    },
+    "income_tax": {
+        "temperature": 0.67,
+        "model": "gpt-4-turbo",
+        "max_tokens": DEFAULT_MAX_TOKENS,
+    },
+    "strategic_management": {
+        "temperature": 0.72,
+        "model": "gpt-4-turbo",
+        "max_tokens": DEFAULT_MAX_TOKENS,
+    },
+
+    # ── Final ──────────────────────────────────────────────────────────────────
+    "advanced_financial_management": {
+        "temperature": 0.70,
+        "model": "gpt-4-turbo",
+        "max_tokens": DEFAULT_MAX_TOKENS,
+    },
+    "advanced_auditing": {
+        "temperature": 0.68,
+        "model": "gpt-4-turbo",
+        "max_tokens": DEFAULT_MAX_TOKENS,
+    },
+    "direct_tax_international": {
+        "temperature": 0.67,
+        "model": "gpt-4-turbo",
+        "max_tokens": DEFAULT_MAX_TOKENS,
+    },
+    "financial_reporting": {
+        "temperature": 0.65,
+        "model": "gpt-4-turbo",
+        "max_tokens": DEFAULT_MAX_TOKENS,
+    },
 }
 
 def get_llm_for_subject(subject):
     """Get subject-specific LLM configuration"""
-    config = SUBJECT_CONFIG.get(subject.lower(), SUBJECT_CONFIG["business_economics"])
+    config = SUBJECT_CONFIG.get(normalize_subject_key(subject), SUBJECT_CONFIG["business_economics"])
     
     llm = ChatOpenAI(
         openai_api_key=OPENAI_API_KEY,
@@ -135,7 +218,11 @@ def get_all_topics(level, subject, chapter_name, unit_name=None):
         client.close()
         
         if not chunks:
-            print(f"❌ No chunks found")
+            print(f"❌ No chunks found for query: {query}")
+            # Debug: show what subjects/chapters exist at this level
+            sample = list(chunks_collection.find({"level": level}, {"subject": 1, "chapter_name": 1, "_id": 0}).limit(20))
+            distinct_subjects = list({d["subject"] for d in sample if "subject" in d})
+            print(f"   Available subjects at level '{level}': {distinct_subjects}")
             return []
         
         # Group by topic_name only
@@ -235,6 +322,11 @@ def fetch_topic_chunks_optimized(level, subject, chapter_name, unit_name, topic_
             print(f"❌ No chunks found for topic: {topic_name}")
             print(f"   Query: {query}")
             return "", None
+
+        # Debug: confirm the actual stored subject/chapter from DB
+        first = chunks[0]
+        print(f"   DB values — level='{first.get('level')}' subject='{first.get('subject')}' chapter='{first.get('chapter_name')}'")
+
         
         # Extract metadata from first chunk
         metadata = {
@@ -328,38 +420,29 @@ def validate_mcq(mcq):
     return True
 
 def get_subject_context(subject):
-    """Get subject-specific context"""
-    subject_contexts = {
-        "business_economics": {
-            "name": "Business Economics",
-            "focus": ["demand/supply", "market dynamics", "cost analysis", "policy implications"],
-        },
-        "accounting": {
-            "name": "Financial Accounting",
-            "focus": ["standards", "calculations", "practical scenarios", "consolidation"],
-        },
-        "auditing": {
-            "name": "Auditing",
-            "focus": ["procedures", "evidence", "compliance", "risk assessment"],
-        },
-        "law": {
-            "name": "Business Law",
-            "focus": ["principles", "case studies", "compliance", "statutory requirements"],
-        },
-        "taxation": {
-            "name": "Income Tax",
-            "focus": ["computations", "deductions", "planning", "policy"],
-        },
-        "cost_accounting": {
-            "name": "Cost Accounting",
-            "focus": ["methods", "analysis", "decisions", "costing systems"],
-        }
+    """Get subject-specific context.
+
+    ``subject`` is the EXACT MongoDB subject name (e.g. "Cost and Management
+    Accounting", "IDT", "Advanced auditing,Assurance and Professional ethics").
+    The original name is preserved as the display name; an internal config_key
+    is added for prompt-level lookups.
+    """
+    config_key = normalize_subject_key(subject)
+
+    focus_map = {
+        "business_economics": ["demand/supply", "market dynamics", "cost analysis", "policy implications"],
+        "accounting":         ["standards", "calculations", "practical scenarios", "consolidation"],
+        "auditing":           ["procedures", "evidence", "compliance", "risk assessment"],
+        "law":                ["principles", "case studies", "compliance", "statutory requirements"],
+        "taxation":           ["computations", "deductions", "planning", "policy"],
+        "cost_accounting":    ["methods", "analysis", "decisions", "costing systems"],
     }
-    
-    return subject_contexts.get(subject.lower(), {
-        "name": subject,
-        "focus": ["general concepts"],
-    })
+
+    return {
+        "name": subject,                                    # original DB name — used in prompt display
+        "config_key": config_key,                           # internal key — used for config lookups
+        "focus": focus_map.get(config_key, ["general concepts"]),
+    }
 
 def generate_mcq(level, subject, chapter_name, difficulty="very_hard", unit_name=None, 
                  question_number=1, topic_data=None):
@@ -576,6 +659,181 @@ def generate_multiple_mcqs(level, subject, chapter_name, num_questions=1,
     print(f"{'#'*70}\n")
     
     return mcqs
+
+# ===== CASE SCENARIO GENERATION =====
+
+def get_llm_for_case_scenario(subject):
+    """LLM for case scenario — same model/temperature but higher token cap."""
+    config = SUBJECT_CONFIG.get(normalize_subject_key(subject), SUBJECT_CONFIG["business_economics"])
+    llm = ChatOpenAI(
+        openai_api_key=OPENAI_API_KEY,
+        model_name=config["model"],
+        temperature=config["temperature"],
+        max_tokens=CASE_SCENARIO_MAX_TOKENS,
+        timeout=180
+    )
+    return llm, config
+
+
+def parse_case_scenario_response(response_text):
+    """Parse the LLM's case scenario JSON (narrative + questions list)."""
+    response_text = response_text.strip()
+
+    if "```json" in response_text:
+        response_text = response_text.split("```json")[1].split("```")[0].strip()
+    elif "```" in response_text:
+        response_text = response_text.split("```")[1].split("```")[0].strip()
+
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError:
+        start = response_text.find("{")
+        end = response_text.rfind("}") + 1
+        if start != -1 and end > start:
+            try:
+                return json.loads(response_text[start:end])
+            except Exception:
+                return None
+    return None
+
+
+def validate_case_scenario(data):
+    """Validate that the parsed case scenario has all required fields."""
+    required_top = ["case_scenario_title", "case_scenario_narrative", "questions"]
+    for field in required_top:
+        if field not in data:
+            return False, f"Missing top-level field: {field}"
+
+    if not isinstance(data["questions"], list) or len(data["questions"]) < 1:
+        return False, "questions must be a non-empty list"
+
+    for i, q in enumerate(data["questions"]):
+        missing = [k for k in ("question", "options", "correct_answer", "explanation") if k not in q]
+        if missing:
+            return False, f"Question {i + 1} missing: {missing}"
+        if not isinstance(q["options"], list) or len(q["options"]) != 4:
+            return False, f"Question {i + 1} must have exactly 4 options"
+
+    return True, "valid"
+
+
+def generate_case_scenario_mcqs(level, subject, chapter_name,
+                                difficulty="very-hard", num_questions=4, unit_name=None):
+    """
+    Generate an ICAI-standard case scenario with multiple related MCQs.
+
+    The LLM produces ONE shared narrative + num_questions MCQs in a single call.
+
+    Returns:
+        dict  – { case_scenario_title, case_scenario_narrative, questions, metadata }
+        None  – on failure
+    """
+    print(f"\n{'#'*70}")
+    print(f"# ICAI CASE SCENARIO MCQ GENERATION")
+    print(f"# Level: {level} | Subject: {subject.upper()}")
+    print(f"# Chapter: {chapter_name}")
+    if unit_name:
+        print(f"# Unit: {unit_name}")
+    print(f"# Difficulty: {difficulty.upper()} | Questions: {num_questions}")
+    print(f"{'#'*70}\n")
+
+    # ── 1. Fetch topics ──────────────────────────────────────────────────────
+    print("📚 Step 1: Scanning topics in chapter...")
+    topics_list = get_all_topics(level, subject, chapter_name, unit_name)
+    if not topics_list:
+        print("❌ No topics found")
+        return None
+
+    # ── 2. Select best topic ─────────────────────────────────────────────────
+    selected_topic = select_best_topic_for_mcq(topics_list, prefer_complex=True)
+    if not selected_topic:
+        print("❌ Could not select a topic")
+        return None
+
+    # ── 3. Fetch chunks ──────────────────────────────────────────────────────
+    print(f"\n📚 Step 2: Fetching content — topic: {selected_topic['name']}")
+    context, metadata = fetch_topic_chunks_optimized(
+        level, subject, chapter_name, unit_name, selected_topic["name"]
+    )
+    if not context or metadata is None:
+        print("❌ Could not fetch topic content")
+        return None
+
+    # ── 4. Build prompt ──────────────────────────────────────────────────────
+    subject_context = get_subject_context(subject)
+    norm_difficulty = difficulty.lower().replace("-", "_")
+
+    print(f"\n📝 Step 3: Building ICAI case scenario prompt...")
+    prompt = get_case_scenario_prompt(
+        norm_difficulty,
+        context,
+        metadata.get("chapter_number", 1),
+        metadata.get("chapter_name", chapter_name),
+        metadata.get("unit_number", 1),
+        metadata.get("unit_name", unit_name or ""),
+        subject_context,
+        num_questions=num_questions,
+        topic_name=metadata.get("topic_name", selected_topic["name"])
+    )
+
+    # ── 5. Call LLM ──────────────────────────────────────────────────────────
+    llm, config = get_llm_for_case_scenario(subject)
+    print(f"\n🤖 LLM: {config['model']} | temp={config['temperature']} | max_tokens={CASE_SCENARIO_MAX_TOKENS}")
+    print(f"\n⏳ Step 4: Generating case scenario (may take 60–120 s)...")
+
+    try:
+        response = llm.invoke(prompt)
+        response_text = response.content if hasattr(response, "content") else str(response)
+
+        usage = extract_token_usage(response)
+        if usage:
+            print(f"📊 Token usage: input={usage.get('input')}, output={usage.get('output')}, total={usage.get('total')}")
+    except Exception as e:
+        print(f"❌ LLM Error: {e}")
+        return None
+
+    # ── 6. Parse & validate ───────────────────────────────────────────────────
+    print(f"\n📝 Step 5: Parsing response...")
+    case_data = parse_case_scenario_response(response_text)
+
+    if not case_data:
+        print("❌ Failed to parse case scenario response")
+        print(f"   Response (first 500 chars): {response_text[:500]}")
+        return None
+
+    is_valid, reason = validate_case_scenario(case_data)
+    if not is_valid:
+        print(f"❌ Validation failed: {reason}")
+        return None
+
+    # ── 7. Normalize options in each question ─────────────────────────────────
+    print("🔤 Step 6: Normalizing answer options...")
+    normalized_questions = []
+    for i, q in enumerate(case_data["questions"]):
+        q["question_number"] = i + 1
+        q = normalize_options_order(q)
+        for key, value in metadata.items():
+            if key not in q:
+                q[key] = value
+        normalized_questions.append(q)
+
+    case_data["questions"] = normalized_questions
+    case_data["metadata"] = {
+        "level": level,
+        "subject": subject,
+        "chapter_name": chapter_name,
+        "unit_name": unit_name,
+        "topic_name": selected_topic["name"],
+        "difficulty": difficulty,
+        "total_questions": len(normalized_questions)
+    }
+
+    print(f"\n✅ Case Scenario Generated Successfully!")
+    print(f"   Title     : {case_data.get('case_scenario_title', 'N/A')}")
+    print(f"   Questions : {len(normalized_questions)}")
+
+    return case_data
+
 
 # ===== CLI INTERFACE =====
 
