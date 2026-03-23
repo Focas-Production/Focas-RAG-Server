@@ -37,39 +37,39 @@ CASE_SCENARIO_MAX_TOKENS = int(os.getenv("MCQ_CASE_SCENARIO_MAX_TOKENS", "4000")
 
 # Optional built-in pricing hints (override via env for accuracy)
 MODEL_PRICING_PER_1K = {
-    "gpt-4-turbo": (DEFAULT_COST_PER_1K_INPUT, DEFAULT_COST_PER_1K_OUTPUT),
+    "gpt-4o": (DEFAULT_COST_PER_1K_INPUT, DEFAULT_COST_PER_1K_OUTPUT),
 }
 
 SUBJECT_CONFIG = {
     # ── Generic fallback keys (kept for backward compatibility) ────────────────
     "business_economics": {
         "temperature": 0.7,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "accounting": {
         "temperature": 0.65,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "auditing": {
         "temperature": 0.68,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "taxation": {
         "temperature": 0.7,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "law": {
         "temperature": 0.68,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "cost_accounting": {
         "temperature": 0.7,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 
@@ -77,76 +77,76 @@ SUBJECT_CONFIG = {
     # business_economics already covered by generic key above
     "business_law": {
         "temperature": 0.65,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "accounting_foundation": {
         "temperature": 0.63,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 
     # ── Intermediate ───────────────────────────────────────────────────────────
     "advanced_accounts": {
         "temperature": 0.65,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "auditing_ethics": {
         "temperature": 0.67,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "corporate_laws": {
         "temperature": 0.65,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "cost_management_accounting": {
         "temperature": 0.68,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "financial_management": {
         "temperature": 0.68,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "indirect_tax": {
         "temperature": 0.67,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "income_tax": {
         "temperature": 0.67,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "strategic_management": {
         "temperature": 0.72,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 
     # ── Final ──────────────────────────────────────────────────────────────────
     "advanced_financial_management": {
         "temperature": 0.70,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "advanced_auditing": {
         "temperature": 0.68,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "direct_tax_international": {
         "temperature": 0.67,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "financial_reporting": {
         "temperature": 0.65,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4o",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 }
