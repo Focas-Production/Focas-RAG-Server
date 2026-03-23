@@ -36,40 +36,46 @@ DEFAULT_COST_PER_1K_OUTPUT = float(os.getenv("MCQ_COST_PER_1K_OUTPUT", "0"))
 CASE_SCENARIO_MAX_TOKENS = int(os.getenv("MCQ_CASE_SCENARIO_MAX_TOKENS", "4000"))
 
 # Optional built-in pricing hints (override via env for accuracy)
+# Real OpenAI pricing per 1K tokens (input, output)
+# Override with MCQ_COST_PER_1K_INPUT / MCQ_COST_PER_1K_OUTPUT env vars if set to non-zero
+_custom = (DEFAULT_COST_PER_1K_INPUT, DEFAULT_COST_PER_1K_OUTPUT)
 MODEL_PRICING_PER_1K = {
-    "gpt-4o": (DEFAULT_COST_PER_1K_INPUT, DEFAULT_COST_PER_1K_OUTPUT),
+    "gpt-4o":           _custom if DEFAULT_COST_PER_1K_INPUT else (0.00250, 0.01000),
+    "gpt-4o-mini":      _custom if DEFAULT_COST_PER_1K_INPUT else (0.00015, 0.00060),
+    "gpt-4.1":          _custom if DEFAULT_COST_PER_1K_INPUT else (0.00200, 0.00800),
+    "gpt-4.1-mini":     _custom if DEFAULT_COST_PER_1K_INPUT else (0.00010, 0.00040),
 }
 
 SUBJECT_CONFIG = {
     # ── Generic fallback keys (kept for backward compatibility) ────────────────
     "business_economics": {
         "temperature": 0.7,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "accounting": {
         "temperature": 0.65,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "auditing": {
         "temperature": 0.68,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "taxation": {
         "temperature": 0.7,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "law": {
         "temperature": 0.68,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "cost_accounting": {
         "temperature": 0.7,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 
@@ -77,76 +83,76 @@ SUBJECT_CONFIG = {
     # business_economics already covered by generic key above
     "business_law": {
         "temperature": 0.65,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "accounting_foundation": {
         "temperature": 0.63,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 
     # ── Intermediate ───────────────────────────────────────────────────────────
     "advanced_accounts": {
         "temperature": 0.65,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "auditing_ethics": {
         "temperature": 0.67,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "corporate_laws": {
         "temperature": 0.65,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "cost_management_accounting": {
         "temperature": 0.68,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "financial_management": {
         "temperature": 0.68,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "indirect_tax": {
         "temperature": 0.67,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "income_tax": {
         "temperature": 0.67,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "strategic_management": {
         "temperature": 0.72,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 
     # ── Final ──────────────────────────────────────────────────────────────────
     "advanced_financial_management": {
         "temperature": 0.70,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "advanced_auditing": {
         "temperature": 0.68,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "direct_tax_international": {
         "temperature": 0.67,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "financial_reporting": {
         "temperature": 0.65,
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 }
@@ -155,14 +161,15 @@ def get_llm_for_subject(subject):
     """Get subject-specific LLM configuration"""
     config = SUBJECT_CONFIG.get(normalize_subject_key(subject), SUBJECT_CONFIG["business_economics"])
     
+    model = os.getenv("LLM_MODEL", config["model"])
     llm = ChatOpenAI(
         openai_api_key=OPENAI_API_KEY,
-        model_name=config["model"],
+        model_name=model,
         temperature=config["temperature"],
         max_tokens=config["max_tokens"],
         timeout=120  # Increased timeout for complex generation
     )
-    
+    config = {**config, "model": model}
     return llm, config
 
 def extract_token_usage(response):
@@ -665,13 +672,15 @@ def generate_multiple_mcqs(level, subject, chapter_name, num_questions=1,
 def get_llm_for_case_scenario(subject):
     """LLM for case scenario — same model/temperature but higher token cap."""
     config = SUBJECT_CONFIG.get(normalize_subject_key(subject), SUBJECT_CONFIG["business_economics"])
+    model = os.getenv("LLM_MODEL", config["model"])
     llm = ChatOpenAI(
         openai_api_key=OPENAI_API_KEY,
-        model_name=config["model"],
+        model_name=model,
         temperature=config["temperature"],
         max_tokens=CASE_SCENARIO_MAX_TOKENS,
         timeout=180
     )
+    config = {**config, "model": model}
     return llm, config
 
 
