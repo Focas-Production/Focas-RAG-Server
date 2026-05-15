@@ -872,9 +872,12 @@ def select_question_type(subject, difficulty, previous_types=None, chapter_name=
     selected = random.choice(available_types) if available_types else "definition"
     return selected
 
-def get_prompt(difficulty, context, chapter_number, chapter_name, unit_number, unit_name, subject_context, question_count=1, topic_name=""):
+def get_prompt(difficulty, context, chapter_number, chapter_name, unit_number, unit_name,
+               subject_context, question_count=1, topic_name="", used_question_types=None):
     """Generate compact, high-precision prompt for MCQ generation"""
-    
+    if used_question_types is None:
+        used_question_types = []
+
     difficulty_lower = difficulty.lower()
     subject_name = subject_context.get("name", "")
     subject = normalize_subject_key(subject_name)
@@ -882,52 +885,85 @@ def get_prompt(difficulty, context, chapter_number, chapter_name, unit_number, u
     # Get subject config
     config = SUBJECT_CONFIGURATIONS.get(subject, SUBJECT_CONFIGURATIONS["business_economics"])
 
-    # Select question type appropriate for difficulty
-    question_type = select_question_type(subject, difficulty_lower, chapter_name=chapter_name)
-    
+    # Select question type appropriate for difficulty, avoiding recently used types
+    question_type = select_question_type(
+        subject, difficulty_lower, previous_types=used_question_types, chapter_name=chapter_name
+    )
+
     # Get template (only business_economics has question_templates; others use default)
     template = config.get("question_templates", {}).get(question_type, "[{scenario}]. What is the correct answer based on the content?")
     
     # Get difficulty description
     diff_info = DIFFICULTY_DESCRIPTIONS.get(difficulty_lower, DIFFICULTY_DESCRIPTIONS["hard"])
     
-    prompt = f"""GENERATE CA EXAM MCQ - {diff_info['name']} LEVEL
+    avoid_repetition = (
+        f"\n• AVOID REPETITION: Do NOT generate the same type of question as these "
+        f"already-asked types: {used_question_types}. Test a different concept or angle."
+        if used_question_types else ""
+    )
 
-⚠️ MANDATORY: Read the SOURCE CONTENT first. The question MUST be about
-the topic "{topic_name}" using ONLY concepts present in the source content.
-Do NOT use knowledge from your training that is absent from the source content.
+    prompt = f"""GENERATE CA EXAM MCQ — {diff_info['name']} LEVEL
 
-CONTENT:
-Chapter: {chapter_number} - {chapter_name}
-Unit: {unit_number} - {unit_name}
-Topic: {topic_name}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SOURCE CONTENT  ← ONLY material you may use
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Subject : {subject_name}
+Chapter : {chapter_number} — {chapter_name}
+Unit    : {unit_number} — {unit_name}
+Topic   : {topic_name}
 
-SOURCE CONTENT (derive the question exclusively from this):
 {context}
 
-DIFFICULTY TARGET:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SCOPE GUARD — MANDATORY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• This question is for Subject: "{subject_name}", Chapter: "{chapter_name}".
+• Generate questions ONLY about concepts present in the source content above.
+• Do NOT introduce GST, taxation, or topics from other subjects/chapters.
+• If the source content appears to be from the wrong chapter, still generate
+  a question strictly limited to what the content actually says.{avoid_repetition}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DIFFICULTY: {diff_info['name']}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {get_difficulty_instruction(difficulty_lower, subject)}
 Key traits: {', '.join(diff_info['characteristics'])}
 
-REQUIREMENTS:
-- Question must test a concept explicitly present in the source content above.
-- Use a realistic Indian scenario with specific numbers where the topic allows.
-- Include 4 plausible options labeled A-D.
-- Correct answer not obvious; requires analysis of the source content.
-- No external knowledge — only what is in the source content.
-- Explanation: concise but complete (100-160 words).
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUESTION REQUIREMENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Use a realistic Indian scenario with specific rupee amounts where applicable.
+• Ask for exactly ONE value or conclusion — do NOT ask "find X and Y" together.
+• All data needed to solve the question MUST be stated explicitly in the question
+  text. Do not require the student to assume unstated rates or figures.
+• Explanation: step-by-step working, 100–160 words, explain why wrong options fail.
 
-QUESTION TEMPLATE:
-{template}
+QUESTION TEMPLATE HINT: {template}
 
-RESPONSE JSON ONLY:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MANDATORY QUALITY CHECKLIST — Do this BEFORE writing the JSON:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Step 1 — SOLVE: Work through the question fully. Write the exact answer value.
+Step 2 — PLACE ANSWER: Assign that exact value to one option (A, B, C, or D).
+          Fill the other 3 options with plausible but WRONG values (common
+          mistakes: wrong formula, off-by-one step, sign error, etc.).
+Step 3 — SET correct_answer: Set "correct_answer" to the LETTER of the option
+          that holds the correct value from Step 1. Verify it matches.
+Step 4 — UNIQUENESS: Confirm all 4 option values/amounts are different from
+          each other. If any two are identical → replace the duplicate.
+Step 5 — DATA CHECK: Re-read the question. Is every number / rate needed to
+          solve it present in the question text? If not → add the missing data.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RESPONSE — Return ONLY valid JSON (no markdown, no extra text):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {{
   "difficulty": "{difficulty}",
   "question_type": "{question_type}",
-  "question": "Detailed question with numbers and scenario",
+  "question": "Full question text with all data needed to solve it.",
   "options": ["A: ...", "B: ...", "C: ...", "D: ..."],
-  "correct_answer": "A",
-  "explanation": "Step-by-step reasoning and why others are wrong."
+  "correct_answer": "X",
+  "explanation": "Step 1: ... Step 2: ... Therefore answer is X. Options Y and Z are wrong because ..."
 }}"""
 
     return prompt

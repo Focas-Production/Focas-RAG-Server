@@ -51,13 +51,17 @@ exports.getChaptersByLevelAndSubject = async (req, res) => {
 };
 
 
-// ✅ 4. Get Units by Chapter Name
+// ✅ 4. Get Units by Level + Subject + Chapter Name
 exports.getUnitsByChapter = async (req, res) => {
   try {
-    const { chapter_name } = req.query;
+    const { level, subject, chapter_name } = req.query;
+
+    if (!level || !subject || !chapter_name) {
+      return res.status(400).json({ error: "level, subject, and chapter_name are required" });
+    }
 
     const units = await Chunk.aggregate([
-      { $match: { chapter_name } },
+      { $match: { level, subject, chapter_name } },
       {
         $group: {
           _id: "$unit_number",

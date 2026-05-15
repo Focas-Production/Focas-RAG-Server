@@ -5,6 +5,7 @@ Selects optimal chunks and uses advanced prompting
 """
 
 import os
+import re
 import json
 import pymongo
 import random
@@ -17,6 +18,8 @@ from mcq_prompts import (
     normalize_options_order,
     normalize_subject_key,
 )
+
+MAX_GENERATION_RETRIES = 2
 
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -203,63 +206,70 @@ def estimate_cost(model_name, token_usage):
 def get_all_topics(level, subject, chapter_name, unit_name=None):
     """
     Fetch all unique topics for a chapter/unit with their chunk counts.
-    Sorts by importance (chunk count).
+    Uses MongoDB aggregation — does NOT load full chunk text into Python.
     """
+    client = None
     try:
         client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
         db = client.get_default_database()
         chunks_collection = db["icaichunks"]
-        
-        # Build query
-        query = {
-            "level": level,
-            "subject": subject,
-            "chapter_name": chapter_name
-        }
-        
+
+        match_filter = {"level": level, "subject": subject, "chapter_name": chapter_name}
         if unit_name:
-            query["unit_name"] = unit_name
-        
-        # Get all chunks for this chapter/unit
-        chunks = list(chunks_collection.find(query))
-        client.close()
-        
-        if not chunks:
-            print(f"❌ No chunks found for query: {query}")
-            # Debug: show what subjects/chapters exist at this level
-            sample = list(chunks_collection.find({"level": level}, {"subject": 1, "chapter_name": 1, "_id": 0}).limit(20))
-            distinct_subjects = list({d["subject"] for d in sample if "subject" in d})
+            match_filter["unit_name"] = unit_name
+
+        def _run_aggregation(f):
+            pipeline = [
+                {"$match": f},
+                {"$group": {
+                    "_id": "$topic_name",
+                    "chunk_count": {"$sum": 1},
+                    "total_chunks": {"$first": "$total_chunks_in_topic"}
+                }},
+                {"$sort": {"chunk_count": -1}}
+            ]
+            return list(chunks_collection.aggregate(pipeline))
+
+        results = _run_aggregation(match_filter)
+
+        if not results:
+            # Case-insensitive chapter_name fallback
+            all_chapters = chunks_collection.distinct(
+                "chapter_name", {"level": level, "subject": subject}
+            )
+            pattern = re.compile(re.escape(chapter_name), re.IGNORECASE)
+            matched = [c for c in all_chapters if pattern.search(c)]
+            if matched:
+                print(f"   ⚠️ Exact match failed — using case-insensitive match: '{matched[0]}'")
+                match_filter["chapter_name"] = matched[0]
+                results = _run_aggregation(match_filter)
+
+        if not results:
+            print(f"❌ No chunks found for: level='{level}' subject='{subject}' chapter='{chapter_name}'")
+            distinct_subjects = chunks_collection.distinct("subject", {"level": level})
             print(f"   Available subjects at level '{level}': {distinct_subjects}")
+            distinct_chapters = chunks_collection.distinct("chapter_name", {"level": level, "subject": subject})
+            print(f"   Available chapters for subject '{subject}': {distinct_chapters[:10]}")
             return []
-        
-        # Group by topic_name only
-        topics_dict = {}
-        for chunk in chunks:
-            topic_name = chunk.get("topic_name", "Unknown")
-            
-            if topic_name not in topics_dict:
-                topics_dict[topic_name] = {
-                    "name": topic_name,
-                    "chunk_count": 0,
-                    "total_chunks": chunk.get("total_chunks_in_topic", 0)
-                }
-            
-            topics_dict[topic_name]["chunk_count"] += 1
-        
-        # Convert to list and sort by chunk count (more chunks = more important)
-        topics_list = list(topics_dict.values())
-        topics_list.sort(key=lambda x: x["chunk_count"], reverse=True)
-        
+
+        topics_list = [
+            {"name": r["_id"], "chunk_count": r["chunk_count"], "total_chunks": r.get("total_chunks") or 0}
+            for r in results
+        ]
+
         print(f"✅ Found {len(topics_list)} unique topics")
         print(f"\n📊 TOPICS (sorted by importance):")
         for i, topic in enumerate(topics_list[:10], 1):
             print(f"   {i}. {topic['name']} ({topic['chunk_count']} chunks)")
-        
+
         return topics_list
-        
+
     except Exception as e:
         print(f"❌ Error fetching topics: {e}")
         return []
+    finally:
+        if client:
+            client.close()
 
 def select_best_topic_for_mcq(topics_list, exclude_topics=None, prefer_complex=True):
     """
@@ -304,44 +314,54 @@ def fetch_topic_chunks_optimized(level, subject, chapter_name, unit_name, topic_
     Returns:
         Combined text of all chunks + metadata
     """
+    client = None
     try:
         client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
         db = client.get_default_database()
         chunks_collection = db["icaichunks"]
-        
-        # Query for specific topic by NAME only (not topic_number)
+
         query = {
             "level": level,
             "subject": subject,
             "chapter_name": chapter_name,
             "topic_name": topic_name
         }
-        
-        # Add unit_name if provided
         if unit_name:
             query["unit_name"] = unit_name
-        
-        # Fetch ALL chunks sorted by chunk_order
-        chunks = list(chunks_collection.find(query).sort("chunk_order", 1))
-        client.close()
-        
+
+        # Project only needed fields — exclude embedding to reduce transfer size
+        projection = {"text": 1, "chunk_order": 1, "chapter_number": 1,
+                      "chapter_name": 1, "unit_number": 1, "unit_name": 1,
+                      "topic_name": 1, "total_chunks_in_topic": 1, "_id": 0}
+
+        chunks = list(chunks_collection.find(query, projection).sort("chunk_order", 1))
+
+        if not chunks:
+            # Case-insensitive chapter_name fallback
+            all_chapters = chunks_collection.distinct(
+                "chapter_name", {"level": level, "subject": subject}
+            )
+            pattern = re.compile(re.escape(chapter_name), re.IGNORECASE)
+            matched = [c for c in all_chapters if pattern.search(c)]
+            if matched:
+                query["chapter_name"] = matched[0]
+                chunks = list(chunks_collection.find(query, projection).sort("chunk_order", 1))
+
         if not chunks:
             print(f"❌ No chunks found for topic: {topic_name}")
             print(f"   Query: {query}")
             return "", None
 
-        # Debug: confirm the actual stored subject/chapter from DB
+        # Debug: confirm actual stored values
         first = chunks[0]
-        print(f"   DB values — level='{first.get('level')}' subject='{first.get('subject')}' chapter='{first.get('chapter_name')}'")
+        print(f"   DB values — level='{level}' subject='{first.get('subject')}' chapter='{first.get('chapter_name')}'")
 
-        
-        # Extract metadata from first chunk
         metadata = {
-            "chapter_number": chunks[0].get("chapter_number"),
-            "chapter_name": chunks[0].get("chapter_name"),
-            "unit_number": chunks[0].get("unit_number"),
-            "unit_name": chunks[0].get("unit_name"),
-            "topic_name": chunks[0].get("topic_name"),
+            "chapter_number": first.get("chapter_number"),
+            "chapter_name": first.get("chapter_name"),
+            "unit_number": first.get("unit_number"),
+            "unit_name": first.get("unit_name"),
+            "topic_name": first.get("topic_name"),
             "level": level,
             "subject": subject,
             "total_chunks": len(chunks)
@@ -350,16 +370,12 @@ def fetch_topic_chunks_optimized(level, subject, chapter_name, unit_name, topic_
         def estimate_tokens(text):
             return max(1, int(len(text) / 4))
 
-        # Build per-chunk token estimates
         chunk_texts = [chunk.get("text", "") for chunk in chunks]
-        chunk_tokens = [estimate_tokens(t) for t in chunk_texts]
-        total_tokens = sum(chunk_tokens)
+        total_tokens = sum(estimate_tokens(t) for t in chunk_texts)
 
-        # If within budget, keep all
         if total_tokens <= DEFAULT_CONTEXT_TOKENS:
             selected_texts = chunk_texts
         else:
-            # Select evenly spaced chunks to preserve coverage
             avg_tokens = max(1, int(total_tokens / max(1, len(chunks))))
             target_count = max(4, min(DEFAULT_MAX_CHUNKS, int(DEFAULT_CONTEXT_TOKENS / avg_tokens)))
             target_count = min(len(chunks), target_count)
@@ -372,7 +388,6 @@ def fetch_topic_chunks_optimized(level, subject, chapter_name, unit_name, topic_
 
             selected_texts = [chunk_texts[i] for i in indices]
 
-            # Trim further if still above budget
             while sum(estimate_tokens(t) for t in selected_texts) > DEFAULT_CONTEXT_TOKENS and len(selected_texts) > 4:
                 selected_texts.pop()
 
@@ -383,10 +398,13 @@ def fetch_topic_chunks_optimized(level, subject, chapter_name, unit_name, topic_
         print(f"   Input tokens (est.): {estimate_tokens(combined_text)}")
 
         return combined_text, metadata
-        
+
     except Exception as e:
         print(f"❌ Database Error: {e}")
         return "", None
+    finally:
+        if client:
+            client.close()
 
 def parse_mcq_response(response_text):
     """Parse MCQ JSON response from LLM with robust error handling."""
@@ -413,18 +431,33 @@ def parse_mcq_response(response_text):
     
     return None
 
+_LABEL_RE = re.compile(r"^[A-D]\s*[\)\:\.\-]\s*", re.IGNORECASE)
+
 def validate_mcq(mcq):
-    """Validate MCQ has all required fields."""
-    required = ["question", "options", "explanation", "difficulty"]
-    
+    """
+    Validate MCQ structure and quality.
+    Returns (is_valid: bool, reason: str).
+    Checks: required fields, 4 options, valid correct_answer letter, no duplicate options.
+    """
+    required = ["question", "options", "explanation", "difficulty", "correct_answer"]
     for field in required:
         if field not in mcq:
-            return False
-    
+            return False, f"Missing field: {field}"
+
     if not isinstance(mcq["options"], list) or len(mcq["options"]) != 4:
-        return False
-    
-    return True
+        return False, f"Expected 4 options, got {len(mcq.get('options', []))}"
+
+    correct = str(mcq.get("correct_answer", "")).strip().upper()
+    if correct not in {"A", "B", "C", "D"}:
+        return False, f"Invalid correct_answer: '{correct}'"
+
+    # Extract option bodies (strip label prefix) and check uniqueness
+    bodies = [_LABEL_RE.sub("", str(opt)).strip().lower() for opt in mcq["options"]]
+    if len(set(bodies)) < len(bodies):
+        dupes = list({b for b in bodies if bodies.count(b) > 1})
+        return False, f"Duplicate options: {dupes[:2]}"
+
+    return True, "valid"
 
 def get_subject_context(subject):
     """Get subject-specific context.
@@ -451,8 +484,8 @@ def get_subject_context(subject):
         "focus": focus_map.get(config_key, ["general concepts"]),
     }
 
-def generate_mcq(level, subject, chapter_name, difficulty="very_hard", unit_name=None, 
-                 question_number=1, topic_data=None):
+def generate_mcq(level, subject, chapter_name, difficulty="very_hard", unit_name=None,
+                 question_number=1, topic_data=None, used_question_types=None):
     """
     Generate ONE HIGH-QUALITY MCQ based on a SPECIFIC TOPIC's chunks.
     Optimized for VERY-HARD level questions.
@@ -512,45 +545,57 @@ def generate_mcq(level, subject, chapter_name, difficulty="very_hard", unit_name
         metadata.get("unit_name", "Unknown"),
         subject_context,
         question_count=question_number,
-        topic_name=metadata.get("topic_name", "")
+        topic_name=metadata.get("topic_name", ""),
+        used_question_types=used_question_types or [],
     )
     
-    # Call LLM
+    # Call LLM with retry on validation failure
     print(f"\n⏳ Generating {difficulty.upper()} MCQ (this may take 30-60 seconds)...")
-    try:
-        response = llm.invoke(prompt)
-        response_text = response.content if hasattr(response, "content") else str(response)
+    mcq = None
+    for attempt in range(MAX_GENERATION_RETRIES + 1):
+        if attempt > 0:
+            print(f"🔄 Retry {attempt}/{MAX_GENERATION_RETRIES} — regenerating...")
 
-        # Token usage + approximate cost logging
-        usage = extract_token_usage(response)
-        if usage:
-            model_name = config.get("model", "unknown")
-            print(f"📊 Token usage: input={usage.get('input')}, output={usage.get('output')}, total={usage.get('total')}")
-            cost = estimate_cost(model_name, usage)
-            if cost is not None:
-                print(f"💰 Approx cost ({model_name}): ${cost:.4f}")
-            else:
-                print("💰 Approx cost: set MCQ_COST_PER_1K_INPUT and MCQ_COST_PER_1K_OUTPUT to enable")
-        else:
-            print("📊 Token usage: unavailable from provider")
-    except Exception as e:
-        print(f"❌ LLM Error: {e}")
-        return None
-    
-    # Parse response
-    print(f"📝 Parsing MCQ response...")
-    mcq = parse_mcq_response(response_text)
-    
+        try:
+            response = llm.invoke(prompt)
+            response_text = response.content if hasattr(response, "content") else str(response)
+
+            usage = extract_token_usage(response)
+            if usage and attempt == 0:
+                model_name = config.get("model", "unknown")
+                print(f"📊 Token usage: input={usage.get('input')}, output={usage.get('output')}, total={usage.get('total')}")
+                cost = estimate_cost(model_name, usage)
+                if cost is not None:
+                    print(f"💰 Approx cost ({model_name}): ${cost:.4f}")
+        except Exception as e:
+            print(f"❌ LLM Error: {e}")
+            if attempt >= MAX_GENERATION_RETRIES:
+                return None
+            continue
+
+        print(f"📝 Parsing MCQ response (attempt {attempt + 1})...")
+        parsed = parse_mcq_response(response_text)
+
+        if not parsed:
+            print(f"❌ Failed to parse JSON response")
+            if attempt >= MAX_GENERATION_RETRIES:
+                print(f"   Response (first 500 chars): {response_text[:500]}")
+                return None
+            continue
+
+        is_valid, reason = validate_mcq(parsed)
+        if is_valid:
+            mcq = parsed
+            break
+
+        print(f"⚠️ Validation failed: {reason}")
+        if attempt >= MAX_GENERATION_RETRIES:
+            print(f"❌ MCQ generation failed after {MAX_GENERATION_RETRIES} retries: {reason}")
+            return None
+
     if not mcq:
-        print("❌ Failed to parse MCQ response")
-        print(f"   Response (first 500 chars): {response_text[:500]}")
         return None
-    
-    # Validate
-    if not validate_mcq(mcq):
-        print("❌ MCQ validation failed - missing required fields")
-        return None
-    
+
     # Normalize options order/format
     print("🔤 Normalizing answer options to A-D...")
     mcq = normalize_options_order(mcq)
@@ -600,57 +645,64 @@ def generate_multiple_mcqs(level, subject, chapter_name, num_questions=1,
     
     mcqs = []
     used_topics = []
-    
+    used_question_types = []
+
     # Step 1: Get all topics for this chapter/unit
     print("📚 Step 1: Scanning for all topics in chapter...")
     topics_list = get_all_topics(level, subject, chapter_name, unit_name)
-    
+
     if not topics_list:
         print("❌ No topics found in chapter")
         return []
-    
+
     # Step 2: Generate MCQ for each topic (using best topics first)
     for i in range(num_questions):
         question_num = i + 1
-        
+
         print(f"\n{'='*70}")
         print(f"📝 MCQ {question_num}/{num_questions}")
         print(f"{'='*70}")
-        
+
         try:
-            # Select BEST available topic
-            selected_topic = select_best_topic_for_mcq(topics_list, exclude_topics=used_topics, prefer_complex=True)
-            
+            # Select BEST available topic (different from previously used ones)
+            selected_topic = select_best_topic_for_mcq(
+                topics_list, exclude_topics=used_topics, prefer_complex=True
+            )
+
             if not selected_topic:
                 print(f"⚠️ No more topics available")
                 break
-            
+
             used_topics.append(selected_topic["name"])
-            
+
             # Fetch OPTIMIZED chunks for this topic
             print(f"\n📚 Fetching comprehensive content for MCQ generation...")
             context, metadata = fetch_topic_chunks_optimized(
                 level, subject, chapter_name, unit_name,
                 selected_topic["name"]
             )
-            
+
             if not context or metadata is None:
                 print(f"⚠️ Skipping topic - no content retrieved")
                 continue
-            
+
             # Generate MCQ for this topic
             mcq = generate_mcq(
                 level, subject, chapter_name,
                 difficulty=difficulty,
                 unit_name=unit_name,
                 question_number=question_num,
-                topic_data=(context, metadata)
+                topic_data=(context, metadata),
+                used_question_types=used_question_types,
             )
-            
+
             if mcq:
                 mcqs.append(mcq)
+                q_type = mcq.get("question_type")
+                if q_type:
+                    used_question_types.append(q_type)
                 print(f"\n✅ Successfully generated MCQ #{question_num}")
-        
+
         except Exception as e:
             print(f"❌ Error generating MCQ {question_num}: {e}")
             import traceback
