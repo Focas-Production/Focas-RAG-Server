@@ -55,8 +55,7 @@ create_production_indexes()
 # --- LangChain Clients ---
 embedder = OpenAIEmbeddings(
     openai_api_key=OPENAI_API_KEY,
-    model="text-embedding-3-small"
-
+    model="text-embedding-ada-002"
 )
 
 llm = ChatOpenAI(
