@@ -22,6 +22,7 @@ from mcq_prompts import (
 MAX_GENERATION_RETRIES = 2
 
 load_dotenv()
+load_dotenv(".env.local", override=True)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MONGO_URI = os.getenv("MONGO_URI")
 
@@ -46,116 +47,126 @@ MODEL_PRICING_PER_1K = {
     "gpt-4o":           _custom if DEFAULT_COST_PER_1K_INPUT else (0.00250, 0.01000),
     "gpt-4o-mini":      _custom if DEFAULT_COST_PER_1K_INPUT else (0.00015, 0.00060),
     "gpt-4.1":          _custom if DEFAULT_COST_PER_1K_INPUT else (0.00200, 0.00800),
-    "gpt-4.1-mini":     _custom if DEFAULT_COST_PER_1K_INPUT else (0.00010, 0.00040),
+    "gpt-4.1-mini":     _custom if DEFAULT_COST_PER_1K_INPUT else (0.00040, 0.00160),
 }
+
+# ── Model strategy ──────────────────────────────────────────────────────────
+# gpt-4.1-mini: newer architecture, better instruction-following and arithmetic
+# than gpt-4o-mini at comparable cost.  Used for all subjects.
+#
+# Temperature guide:
+#   Numerical subjects (Accounting, Costing, Tax, FM, Advanced Accounts):
+#     → 0.3  — lower variance reduces arithmetic errors
+#   Conceptual/analytical subjects (Law, Auditing, SM, Economics):
+#     → 0.5  — moderate creativity for diverse scenario framing
+# ────────────────────────────────────────────────────────────────────────────
 
 SUBJECT_CONFIG = {
     # ── Generic fallback keys (kept for backward compatibility) ────────────────
     "business_economics": {
-        "temperature": 0.7,
-        "model": "gpt-4o-mini",
+        "temperature": 0.5,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "accounting": {
-        "temperature": 0.65,
-        "model": "gpt-4o-mini",
+        "temperature": 0.3,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "auditing": {
-        "temperature": 0.68,
-        "model": "gpt-4o-mini",
+        "temperature": 0.5,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "taxation": {
-        "temperature": 0.7,
-        "model": "gpt-4o-mini",
+        "temperature": 0.3,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "law": {
-        "temperature": 0.68,
-        "model": "gpt-4o-mini",
+        "temperature": 0.5,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "cost_accounting": {
-        "temperature": 0.7,
-        "model": "gpt-4o-mini",
+        "temperature": 0.3,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 
     # ── Foundation ─────────────────────────────────────────────────────────────
-    # business_economics already covered by generic key above
     "business_law": {
-        "temperature": 0.65,
-        "model": "gpt-4o-mini",
+        "temperature": 0.5,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "accounting_foundation": {
-        "temperature": 0.63,
-        "model": "gpt-4o-mini",
+        "temperature": 0.3,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 
     # ── Intermediate ───────────────────────────────────────────────────────────
     "advanced_accounts": {
-        "temperature": 0.65,
-        "model": "gpt-4o-mini",
+        "temperature": 0.3,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "auditing_ethics": {
-        "temperature": 0.67,
-        "model": "gpt-4o-mini",
+        "temperature": 0.5,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "corporate_laws": {
-        "temperature": 0.65,
-        "model": "gpt-4o-mini",
+        "temperature": 0.5,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "cost_management_accounting": {
-        "temperature": 0.68,
-        "model": "gpt-4o-mini",
+        "temperature": 0.3,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "financial_management": {
-        "temperature": 0.68,
-        "model": "gpt-4o-mini",
+        "temperature": 0.3,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "indirect_tax": {
-        "temperature": 0.67,
-        "model": "gpt-4o-mini",
+        "temperature": 0.3,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "income_tax": {
-        "temperature": 0.67,
-        "model": "gpt-4o-mini",
+        "temperature": 0.3,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "strategic_management": {
-        "temperature": 0.72,
-        "model": "gpt-4o-mini",
+        "temperature": 0.5,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 
     # ── Final ──────────────────────────────────────────────────────────────────
     "advanced_financial_management": {
-        "temperature": 0.70,
-        "model": "gpt-4o-mini",
+        "temperature": 0.3,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "advanced_auditing": {
-        "temperature": 0.68,
-        "model": "gpt-4o-mini",
+        "temperature": 0.5,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "direct_tax_international": {
-        "temperature": 0.67,
-        "model": "gpt-4o-mini",
+        "temperature": 0.3,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "financial_reporting": {
-        "temperature": 0.65,
-        "model": "gpt-4o-mini",
+        "temperature": 0.3,
+        "model": "gpt-4.1-mini",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 }
@@ -433,11 +444,54 @@ def parse_mcq_response(response_text):
 
 _LABEL_RE = re.compile(r"^[A-D]\s*[\)\:\.\-]\s*", re.IGNORECASE)
 
+# Patterns that signal which option the explanation declares correct.
+# Ordered from most-specific to least-specific.
+_EXPLANATION_ANSWER_PATTERNS = [
+    re.compile(r"✅\s*[Cc]orrect\s+[Aa]nswer[:\s]+[Oo]ption\s*([A-D])", re.IGNORECASE),
+    re.compile(r"[Cc]orrect\s+[Aa]nswer\s+is\s+(?:[Oo]ption\s*)?([A-D])\b", re.IGNORECASE),
+    re.compile(r"[Aa]nswer\s+is\s+(?:[Oo]ption\s*)?([A-D])\b", re.IGNORECASE),
+    re.compile(r"[Oo]ption\s+([A-D])\s+is\s+(?:the\s+)?correct", re.IGNORECASE),
+    re.compile(r"[Tt]herefore[,.]?\s+(?:[Oo]ption\s*)?([A-D])\b", re.IGNORECASE),
+    re.compile(r"[Hh]ence[,.]?\s+(?:[Oo]ption\s*)?([A-D])\b", re.IGNORECASE),
+    re.compile(r"^([A-D])\s+is\s+(?:the\s+)?correct", re.IGNORECASE | re.MULTILINE),
+]
+
+
+def extract_stated_answer_from_explanation(explanation: str):
+    """
+    Try to detect which option letter the explanation declares as correct.
+    Returns the letter (A/B/C/D) or None if not found.
+    """
+    for pattern in _EXPLANATION_ANSWER_PATTERNS:
+        m = pattern.search(explanation)
+        if m:
+            return m.group(1).upper()
+    return None
+
+
+def try_autocorrect_answer(mcq: dict) -> dict:
+    """
+    If correct_answer disagrees with the letter stated in the explanation,
+    attempt to fix correct_answer to match the explanation.
+    Returns the (possibly corrected) mcq dict.
+    """
+    explanation = mcq.get("explanation", "")
+    current = str(mcq.get("correct_answer", "")).strip().upper()
+    stated = extract_stated_answer_from_explanation(explanation)
+
+    if stated and stated != current and stated in {"A", "B", "C", "D"}:
+        print(f"   ⚠️  Answer mismatch detected: correct_answer='{current}' but explanation states '{stated}'")
+        print(f"   🔧 Auto-correcting correct_answer → '{stated}'")
+        mcq["correct_answer"] = stated
+    return mcq
+
+
 def validate_mcq(mcq):
     """
     Validate MCQ structure and quality.
     Returns (is_valid: bool, reason: str).
-    Checks: required fields, 4 options, valid correct_answer letter, no duplicate options.
+    Checks: required fields, 4 options, valid correct_answer letter, no duplicate options,
+    and explanation-answer consistency.
     """
     required = ["question", "options", "explanation", "difficulty", "correct_answer"]
     for field in required:
@@ -456,6 +510,11 @@ def validate_mcq(mcq):
     if len(set(bodies)) < len(bodies):
         dupes = list({b for b in bodies if bodies.count(b) > 1})
         return False, f"Duplicate options: {dupes[:2]}"
+
+    # Cross-check: does the explanation agree with correct_answer?
+    stated = extract_stated_answer_from_explanation(mcq.get("explanation", ""))
+    if stated and stated != correct:
+        return False, f"Explanation states '{stated}' is correct but correct_answer is '{correct}'"
 
     return True, "valid"
 
@@ -582,6 +641,9 @@ def generate_mcq(level, subject, chapter_name, difficulty="very_hard", unit_name
                 print(f"   Response (first 500 chars): {response_text[:500]}")
                 return None
             continue
+
+        # Attempt to auto-correct answer-explanation mismatch before validation
+        parsed = try_autocorrect_answer(parsed)
 
         is_valid, reason = validate_mcq(parsed)
         if is_valid:
@@ -867,11 +929,12 @@ def generate_case_scenario_mcqs(level, subject, chapter_name,
         print(f"❌ Validation failed: {reason}")
         return None
 
-    # ── 7. Normalize options in each question ─────────────────────────────────
-    print("🔤 Step 6: Normalizing answer options...")
+    # ── 7. Normalize options and auto-correct answers in each question ───────────
+    print("🔤 Step 6: Normalizing answer options and cross-validating answers...")
     normalized_questions = []
     for i, q in enumerate(case_data["questions"]):
         q["question_number"] = i + 1
+        q = try_autocorrect_answer(q)          # fix explanation vs letter mismatch
         q = normalize_options_order(q)
         for key, value in metadata.items():
             if key not in q:

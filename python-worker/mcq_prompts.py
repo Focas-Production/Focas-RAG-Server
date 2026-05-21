@@ -918,10 +918,12 @@ Topic   : {topic_name}
 SCOPE GUARD — MANDATORY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • This question is for Subject: "{subject_name}", Chapter: "{chapter_name}".
-• Generate questions ONLY about concepts present in the source content above.
-• Do NOT introduce GST, taxation, or topics from other subjects/chapters.
-• If the source content appears to be from the wrong chapter, still generate
-  a question strictly limited to what the content actually says.{avoid_repetition}
+• Generate questions ONLY about concepts explicitly present in the SOURCE CONTENT above.
+• NEVER introduce GST / indirect tax questions when the subject is Accounting or Foundation Accounting.
+• NEVER introduce topics from other chapters, other subjects, or your training knowledge
+  that are not in the source content above.
+• If the source content contains GST examples only as illustration inside an Accounting
+  chapter, do NOT make the question about GST — make it about the accounting concept.{avoid_repetition}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DIFFICULTY: {diff_info['name']}
@@ -930,29 +932,44 @@ DIFFICULTY: {diff_info['name']}
 Key traits: {', '.join(diff_info['characteristics'])}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-QUESTION REQUIREMENTS
+QUESTION RULES — ALL MANDATORY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Use a realistic Indian scenario with specific rupee amounts where applicable.
-• Ask for exactly ONE value or conclusion — do NOT ask "find X and Y" together.
-• All data needed to solve the question MUST be stated explicitly in the question
-  text. Do not require the student to assume unstated rates or figures.
-• Explanation: step-by-step working, 100–160 words, explain why wrong options fail.
+• Use a realistic Indian scenario with specific ₹ amounts where applicable.
+• Ask for exactly ONE value or conclusion. NEVER ask "find X and Y" together.
+• Every number, rate, and date needed to solve the question MUST appear in the
+  question text. Never require students to assume unstated data.
+• Each of the 4 options MUST represent a different numerical value or statement.
+• Do NOT label any option or piece of data as "Red Herring" — distractors must
+  appear natural; students must identify them without being told.
+• The explanation MUST end with the sentence:
+  "✅ Correct Answer: Option [X]" (where X is the letter A, B, C, or D).
 
 QUESTION TEMPLATE HINT: {template}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MANDATORY QUALITY CHECKLIST — Do this BEFORE writing the JSON:
+ANSWER CONSTRUCTION — FOLLOW EXACTLY IN THIS ORDER:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Step 1 — SOLVE: Work through the question fully. Write the exact answer value.
-Step 2 — PLACE ANSWER: Assign that exact value to one option (A, B, C, or D).
-          Fill the other 3 options with plausible but WRONG values (common
-          mistakes: wrong formula, off-by-one step, sign error, etc.).
-Step 3 — SET correct_answer: Set "correct_answer" to the LETTER of the option
-          that holds the correct value from Step 1. Verify it matches.
-Step 4 — UNIQUENESS: Confirm all 4 option values/amounts are different from
-          each other. If any two are identical → replace the duplicate.
-Step 5 — DATA CHECK: Re-read the question. Is every number / rate needed to
-          solve it present in the question text? If not → add the missing data.
+STEP 1 — SOLVE THE PROBLEM FIRST:
+   Perform every calculation step-by-step and arrive at the exact correct answer.
+   Write it down: e.g., "Correct answer = ₹80,000"
+
+STEP 2 — CREATE OPTIONS:
+   • Pick one letter from A/B/C/D at random and assign your correct answer to it.
+     (Vary the position — do NOT always put the correct answer in option A.)
+   • Fill the other 3 letters with WRONG values.
+     Wrong values must each represent a realistic mistake a student might make:
+     wrong formula, off-by-one step, sign error, omitted adjustment, etc.
+   • Every option value must be DIFFERENT from every other option value.
+
+STEP 3 — SET correct_answer:
+   Set "correct_answer" to the EXACT LETTER (A, B, C, or D) of the option from
+   Step 2 that contains the correct value. Double-check it before writing JSON.
+
+STEP 4 — VERIFY BEFORE WRITING JSON:
+   (a) Read options[correct_answer]. Does it contain your Step 1 answer? If not — fix it.
+   (b) Do all 4 option values differ? If any two are the same — replace the duplicate.
+   (c) Is every number/rate needed to solve the question stated in the question text?
+   (d) Does the explanation end with "✅ Correct Answer: Option [X]" where X = correct_answer?
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RESPONSE — Return ONLY valid JSON (no markdown, no extra text):
@@ -960,10 +977,10 @@ RESPONSE — Return ONLY valid JSON (no markdown, no extra text):
 {{
   "difficulty": "{difficulty}",
   "question_type": "{question_type}",
-  "question": "Full question text with all data needed to solve it.",
+  "question": "Full question text with ALL data needed to solve it.",
   "options": ["A: ...", "B: ...", "C: ...", "D: ..."],
   "correct_answer": "X",
-  "explanation": "Step 1: ... Step 2: ... Therefore answer is X. Options Y and Z are wrong because ..."
+  "explanation": "Step 1: ... Step 2: ... [full working] ... Option Y is wrong because ... Option Z is wrong because ... ✅ Correct Answer: Option X"
 }}"""
 
     return prompt
@@ -1341,17 +1358,29 @@ CASE SCENARIO NARRATIVE:
   • Realistic Indian person/entity name in a context related to "{topic_name}"
   • Include a formatted data table (Particulars | Details/Value) using numbers
     or facts drawn directly from the source content
-  • All facts internally consistent and accurate
+  • All facts internally consistent and arithmetically accurate
   • Narrative sufficient to answer ALL {num_questions} questions (200–400 words)
+  • Do NOT label any data item as "Red Herring" — distractors must look natural
 
 MCQ QUESTIONS ({num_questions} total):
+  • Each question asks for exactly ONE value or conclusion
+    (NEVER "find X and Y" together — each sub-question gets its own MCQ)
   • All questions test concepts present in the source content about "{topic_name}"
   • Questions progress from foundational → advanced understanding of the topic
   • Q3 onward MAY introduce "Assume for this question that…" modifications
-  • Each question: exactly 4 options (A–D) with plausible distractors
+  • Each question: exactly 4 options (A–D); all 4 option values must differ
   • Correct answer requires reasoning or computation based on the source content
-  • Distractors represent common misconceptions about the topic
-  • Explanation: step-by-step reasoning (100–160 words)
+  • Distractors represent common calculation errors or misconceptions — NOT labeled
+  • Explanation: step-by-step reasoning (100–160 words) ending with:
+    "✅ Correct Answer: Option [X]"
+
+ANSWER CONSTRUCTION (for EACH question):
+  STEP 1 — Compute the correct answer precisely.
+  STEP 2 — Place it in one of A/B/C/D (vary the position across questions).
+  STEP 3 — Fill remaining 3 with distinct wrong values (plausible mistakes).
+  STEP 4 — Set correct_answer to the LETTER containing the correct value.
+  STEP 5 — Verify: read options[correct_answer letter] — does it match Step 1?
+            If not, swap the answer into the right option and update the letter.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RESPONSE — Return ONLY valid JSON (no markdown, no extra text):
@@ -1365,15 +1394,15 @@ RESPONSE — Return ONLY valid JSON (no markdown, no extra text):
       "question": "Based on the above case scenario, [specific question about {topic_name}]?",
       "options": ["A: ...", "B: ...", "C: ...", "D: ..."],
       "correct_answer": "A",
-      "explanation": "Step-by-step reasoning based on the source content.",
+      "explanation": "Step 1: ... Step 2: ... [full working] ... Option B is wrong because ... ✅ Correct Answer: Option A",
       "difficulty": "{difficulty}"
     }},
     {{
       "question_number": 2,
       "question": "...",
       "options": ["A: ...", "B: ...", "C: ...", "D: ..."],
-      "correct_answer": "B",
-      "explanation": "...",
+      "correct_answer": "C",
+      "explanation": "Step 1: ... [full working] ... ✅ Correct Answer: Option C",
       "difficulty": "{difficulty}"
     }}
   ]
@@ -1386,7 +1415,12 @@ CRITICAL: Questions must be based ONLY on the source content provided. Every ans
 def normalize_options_order(mcq):
     """
     Normalize options to A/B/C/D order and remove the "OPTION " prefix.
-    Also ensures correct_answer is a clean letter.
+    Also ensures correct_answer is a clean single letter.
+
+    Critical fix: the previous fallback silently set correct_answer = "A" when
+    the letter could not be resolved — causing wrong-answer bugs. The function
+    now preserves the raw value so that validate_mcq() can catch the bad state
+    and trigger a retry instead of silently accepting a wrong answer.
     """
     if "options" not in mcq or len(mcq["options"]) != 4:
         return mcq
@@ -1424,15 +1458,18 @@ def normalize_options_order(mcq):
     if raw_correct.startswith("OPTION "):
         raw_correct = raw_correct.replace("OPTION ", "", 1).strip()
 
+    # Clean letter already present — done.
     if raw_correct in {"A", "B", "C", "D"}:
         mcq["correct_answer"] = raw_correct
         return mcq
 
+    # Try to strip trailing punctuation/label suffix: "A)" → "A"
     match = re.match(r"^\s*([A-D])\s*[\)\:\.\-]?", raw_correct)
     if match:
         mcq["correct_answer"] = match.group(1)
         return mcq
 
+    # Try to match raw_correct body text against option bodies
     cleaned_correct = raw_correct
     for i, opt in enumerate(ordered):
         opt_body = re.sub(r"^[A-D]\s*[\)\:\.\-]\s*", "", opt, flags=re.IGNORECASE).strip().upper()
@@ -1440,5 +1477,7 @@ def normalize_options_order(mcq):
             mcq["correct_answer"] = chr(ord("A") + i)
             return mcq
 
-    mcq["correct_answer"] = "A"
+    # Could not resolve — leave as-is (invalid letter) so validate_mcq() catches it
+    # and triggers a retry instead of silently accepting a wrong answer.
+    print(f"   ⚠️  normalize_options_order: could not resolve correct_answer='{raw_correct}' — will fail validation")
     return mcq
