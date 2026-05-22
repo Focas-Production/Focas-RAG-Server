@@ -19,7 +19,7 @@ from mcq_prompts import (
     normalize_subject_key,
 )
 
-MAX_GENERATION_RETRIES = 2
+MAX_GENERATION_RETRIES = 3
 
 load_dotenv()
 load_dotenv(".env.local", override=True)
@@ -444,6 +444,86 @@ def parse_mcq_response(response_text):
 
 _LABEL_RE = re.compile(r"^[A-D]\s*[\)\:\.\-]\s*", re.IGNORECASE)
 
+# Extracts standalone Indian-format numbers: ₹1,23,456 / 1,23,456 / 1234.56
+_NUMBER_RE = re.compile(
+    r"(?:₹\s*)?(\d{1,3}(?:,\d{2,3})*(?:\.\d+)?|\d+(?:\.\d+)?)"
+)
+
+
+def _normalise_number(raw: str) -> float:
+    """Strip currency symbols, commas, whitespace → float for comparison."""
+    cleaned = raw.replace("₹", "").replace(",", "").replace(" ", "").strip()
+    try:
+        return float(cleaned)
+    except ValueError:
+        return float("nan")
+
+
+def _extract_numbers(text: str):
+    """Return sorted list of unique floats found in text."""
+    nums = set()
+    for m in _NUMBER_RE.finditer(text):
+        v = _normalise_number(m.group(0))
+        if not (v != v):  # skip NaN
+            nums.add(v)
+    return sorted(nums)
+
+
+def detect_closest_option_bug(mcq: dict) -> tuple:
+    """
+    Detects the 'closest option' bug: LLM computes ₹X in the explanation but
+    the correct option contains a DIFFERENT value (the nearest wrong option).
+
+    Strategy:
+    1. Extract numbers from the last working sentence of the explanation
+       (before the ✅ anchor).
+    2. Extract numbers from the correct option text.
+    3. If the dominant number in the explanation's final step is NOT in the
+       correct option (within 0.5% tolerance), flag it.
+
+    Returns (bug_detected: bool, detail: str).
+    """
+    explanation = mcq.get("explanation", "")
+    correct_letter = str(mcq.get("correct_answer", "")).strip().upper()
+    if correct_letter not in {"A", "B", "C", "D"}:
+        return False, "invalid letter — skip"
+
+    options = mcq.get("options", [])
+    correct_opt_text = next(
+        (o for o in options if str(o).strip().upper().startswith(correct_letter)),
+        ""
+    )
+    if not correct_opt_text:
+        return False, "no matching option — skip"
+
+    # Use only the part of the explanation BEFORE the anchor
+    anchor_idx = explanation.find("✅")
+    work_text = explanation[:anchor_idx] if anchor_idx != -1 else explanation
+    # Focus on the last 300 chars where the final computed value usually appears
+    work_snippet = work_text[-300:] if len(work_text) > 300 else work_text
+
+    expl_nums = _extract_numbers(work_snippet)
+    opt_nums  = _extract_numbers(correct_opt_text)
+
+    if not expl_nums or not opt_nums:
+        return False, "no numbers to compare"
+
+    # The largest number in the explanation snippet is usually the final answer
+    main_expl_val = max(expl_nums)
+    main_opt_val  = max(opt_nums)
+
+    # Allow 0.5% tolerance for minor formatting differences
+    if main_opt_val == 0:
+        return False, "zero value — skip"
+    diff_pct = abs(main_expl_val - main_opt_val) / max(abs(main_opt_val), 1) * 100
+    if diff_pct > 0.5 and abs(main_expl_val - main_opt_val) > 1:
+        return (
+            True,
+            f"explanation computed {main_expl_val:,.2f} but correct option "
+            f"({correct_letter}) contains {main_opt_val:,.2f} — possible 'closest option' bug"
+        )
+    return False, "ok"
+
 # Patterns that signal which option the explanation declares correct.
 # Ordered from most-specific to least-specific.
 _EXPLANATION_ANSWER_PATTERNS = [
@@ -515,6 +595,12 @@ def validate_mcq(mcq):
     stated = extract_stated_answer_from_explanation(mcq.get("explanation", ""))
     if stated and stated != correct:
         return False, f"Explanation states '{stated}' is correct but correct_answer is '{correct}'"
+
+    # Detect "closest option" bug: explanation computes X but correct option contains Y
+    bug, detail = detect_closest_option_bug(mcq)
+    if bug:
+        print(f"   ⚠️  Closest-option bug detected: {detail}")
+        return False, f"Closest-option bug: {detail}"
 
     return True, "valid"
 

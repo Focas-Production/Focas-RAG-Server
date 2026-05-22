@@ -56,7 +56,13 @@ CORE RULES — NON-NEGOTIABLE:
 3. Every number, rate, and date required to solve the question MUST appear in the question text.
 4. The explanation must show step-by-step working and end with: ✅ Correct Answer: Option [X]
 5. Correct answer must match the option letter — verify before returning JSON.
-6. Return ONLY valid JSON. No markdown fences, no extra text."""
+6. Return ONLY valid JSON. No markdown fences, no extra text.
+
+OPTION AUTHORING RULE — THE MOST IMPORTANT RULE:
+You are the AUTHOR of all 4 options. They do not exist until you write them.
+This means: if your computed answer is ₹50,000 then you MUST write ₹50,000 into one
+option slot. NEVER pick the "closest" option. NEVER round to fit an existing value.
+If you compute ₹50,000, the correct option must say ₹50,000 — not ₹48,000 or ₹52,000."""
 
 
 # ── Numerical subject list — triggers rounding section in prompts ─────────────
@@ -1143,33 +1149,49 @@ QUESTION RULES — ALL MANDATORY
 QUESTION TEMPLATE HINT: {template}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ANSWER CONSTRUCTION — FOLLOW EXACTLY IN THIS ORDER:
+ANSWER CONSTRUCTION — YOU ARE THE AUTHOR OF ALL OPTIONS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 1 — READ THE FULL QUESTION FIRST:
-   Re-read every line of the question. Note ALL given values and what is being asked.
-   Do NOT skip any data item — partial reading causes wrong answers.
+⚠️  THE OPTIONS DO NOT EXIST UNTIL YOU WRITE THEM.
+    You are not picking from a list. You are creating the list.
+    This means you MUST write your exact computed answer into one option slot.
 
-STEP 2 — SOLVE THE PROBLEM:
-   Perform every calculation step-by-step and arrive at the exact correct answer.
-   Note it: e.g., "Correct answer = ₹80,000"
+❌ WRONG APPROACH (causes wrong answers):
+   Compute ₹50,000 → write options as ₹48,000 / ₹52,000 / ₹55,000 / ₹45,000
+   → pick "closest" ₹48,000 as correct. THIS IS THE BUG. NEVER DO THIS.
 
-STEP 3 — CREATE OPTIONS:
-   • Pick one letter from A/B/C/D at random and assign your correct answer to it.
-     (Vary the position — do NOT always put the correct answer in option A.)
-   • Fill the other 3 letters with WRONG values.
-     Each wrong value must represent a realistic student mistake:
-     wrong formula, off-by-one step, sign error, omitted adjustment, wrong rate, etc.
-   • Every option value must be DIFFERENT from every other.
+✅ CORRECT APPROACH:
+   Compute ₹50,000 → write ₹50,000 into one slot → fill other 3 with wrong values.
 
-STEP 4 — SET correct_answer:
-   Set "correct_answer" to the EXACT LETTER (A, B, C, or D) containing the correct
-   value from Step 2. Double-check before writing JSON.
+STEP 1 — RE-READ THE QUESTION COMPLETELY:
+   List every given value, rate, date used in computation. Miss nothing.
 
-STEP 5 — VERIFY BEFORE WRITING JSON:
-   (a) Read options[correct_answer letter]. Does it match Step 2? If not — fix it.
-   (b) Do all 4 option values differ? Replace any duplicate.
-   (c) Is every number/rate needed stated in the question text?
-   (d) Does the explanation end with "✅ Correct Answer: Option [X]" where X = correct_answer?
+STEP 2 — SOLVE COMPLETELY:
+   Work every calculation step. Arrive at the EXACT answer.
+   Write it clearly: "My computed answer = ₹X" (or whatever unit).
+
+STEP 3 — CHOOSE THE CORRECT OPTION SLOT:
+   Pick a random letter (A / B / C / D). Vary across questions — not always the same.
+   Write: "Correct answer ₹X goes into option [letter]."
+
+STEP 4 — WRITE OPTIONS (correct slot first, then wrong ones):
+   options[letter] = "₹X"  ← your exact computed answer from Step 2
+   options[other 3] = distinct wrong values, each from a realistic mistake:
+     • Wrong formula used (e.g., Simple Interest instead of Compound)
+     • Omitted one adjustment (e.g., forgot to deduct depreciation)
+     • Used wrong rate (e.g., 15% instead of 12%)
+     • Sign error (added instead of subtracted)
+   All 4 values must be different from each other.
+
+STEP 5 — SET correct_answer = the letter from Step 3.
+
+STEP 6 — MANDATORY SELF-CHECK (do this out loud before writing JSON):
+   "My computed answer was ₹X.
+    My correct_answer is [L].
+    Text of option [L] is: [read it].
+    Does option [L] contain exactly ₹X? YES / NO"
+   → If NO: fix option [L] to say ₹X. Do NOT continue until YES.
+   → If the explanation ends with "✅ Correct Answer: Option [L]", that letter
+     MUST be the one containing ₹X. If it is not, you have a bug — fix it.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RESPONSE — Return ONLY valid JSON (no markdown, no extra text):
@@ -1575,15 +1597,21 @@ MCQ QUESTIONS ({num_questions} total):
   • Explanation: step-by-step working (100–160 words) ending with:
     "✅ Correct Answer: Option [X]"
 
-ANSWER CONSTRUCTION (for EACH question):
-  STEP 1 — Re-read the narrative. List ALL data items relevant to this question.
-  STEP 2 — Compute the correct answer step-by-step.
-  STEP 3 — Place it in one of A/B/C/D (vary position across questions).
-  STEP 4 — Fill remaining 3 with distinct wrong values (plausible mistakes:
-            wrong formula, wrong rate, omitted item, sign error).
-  STEP 5 — Set correct_answer to the LETTER containing the Step 2 result.
-  STEP 6 — Verify: read options[correct_answer letter] — does it match Step 2?
-            If not, swap the answer into the right option and update the letter.
+ANSWER CONSTRUCTION — FOR EACH QUESTION (YOU ARE THE AUTHOR OF ALL OPTIONS):
+  ⚠️  The options do not pre-exist. You write them. So the correct value MUST appear
+      exactly in one option slot — never pick the "closest" value.
+
+  ❌ NEVER: compute ₹X, write options without ₹X, then mark the nearest as correct.
+  ✅ ALWAYS: compute ₹X → write ₹X into one slot → fill 3 slots with wrong values.
+
+  STEP 1 — Re-read the ENTIRE narrative. List every relevant data item.
+  STEP 2 — Compute the correct answer exactly. Write: "Answer = ₹X"
+  STEP 3 — Choose a random letter (A/B/C/D). Vary position across questions.
+           Write: "₹X goes into option [letter]."
+  STEP 4 — options[letter] = ₹X exactly. Other 3 = distinct plausible wrong values.
+  STEP 5 — Set correct_answer = the letter from Step 3.
+  STEP 6 — Self-check: "Does options[correct_answer] contain exactly ₹X? YES/NO"
+           → If NO: fix the option before writing JSON.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RESPONSE — Return ONLY valid JSON (no markdown, no extra text):
