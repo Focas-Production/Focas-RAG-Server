@@ -4,7 +4,8 @@ const {
   getLevels,
   getSubjectsByLevel,
   getChaptersByLevelAndSubject,
-  getUnitsByChapter
+  getUnitsByChapter,
+  getMCQCapabilities,
 } = require("../controllers/subjectDataController.js");
 
 // Get all levels
@@ -16,7 +17,10 @@ router.get("/subjects", getSubjectsByLevel);
 // Get chapters by level + subject
 router.get("/chapters", getChaptersByLevelAndSubject);
 
-// Get units by chapter name
+// Get units by level + subject + chapter_name
 router.get("/units", getUnitsByChapter);
+
+// MCQ capabilities (question types, difficulties, limits)
+router.get("/capabilities", getMCQCapabilities);
 
 module.exports = router;

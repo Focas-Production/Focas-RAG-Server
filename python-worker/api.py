@@ -1,13 +1,147 @@
 import os
+import pymongo
+import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from dotenv import load_dotenv
 from query import get_answer
 from evaluate import evaluate_answer
 from mcq_generator import generate_mcq, generate_multiple_mcqs, generate_case_scenario_mcqs
 
+load_dotenv()
+load_dotenv(".env.local", override=True)
+
+MONGO_URI = os.getenv("MONGO_URI")
+
 # Initialize Flask App
 app = Flask(__name__)
-CORS(app) # Enable cross-origin requests
+CORS(app)  # Enable cross-origin requests
+
+
+# ── Shared MongoDB helper ─────────────────────────────────────────────────────
+
+def _get_chunks_collection():
+    client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    db = client.get_default_database()
+    return client, db["icaichunks"]
+
+
+def _trim_aggregate(pipeline_match, group_field):
+    """
+    Run a $group aggregation that trims whitespace from string fields
+    to avoid duplicates caused by trailing/leading spaces in the data.
+    """
+    client, col = _get_chunks_collection()
+    try:
+        pipeline = [
+            {"$match": pipeline_match},
+            {"$group": {
+                "_id": {"$trim": {"input": {"$ifNull": [f"${group_field}", ""]}}}
+            }},
+            {"$match": {"_id": {"$ne": ""}}},
+            {"$sort": {"_id": 1}},
+        ]
+        return [doc["_id"] for doc in col.aggregate(pipeline)]
+    finally:
+        client.close()
+
+@app.route("/data/levels", methods=["GET"])
+def get_levels():
+    """Distinct CA exam levels stored in the database."""
+    try:
+        levels = _trim_aggregate({}, "level")
+        return jsonify(levels)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/data/subjects", methods=["GET"])
+def get_subjects():
+    """Distinct subjects for a given level."""
+    level = request.args.get("level", "").strip()
+    if not level:
+        return jsonify({"error": "level is required"}), 400
+    try:
+        subjects = _trim_aggregate({"level": level}, "subject")
+        return jsonify(subjects)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/data/chapters", methods=["GET"])
+def get_chapters():
+    """Distinct chapter names for a given level + subject (whitespace-deduplicated)."""
+    level = request.args.get("level", "").strip()
+    subject = request.args.get("subject", "").strip()
+    if not level or not subject:
+        return jsonify({"error": "level and subject are required"}), 400
+    try:
+        client, col = _get_chunks_collection()
+        try:
+            pipeline = [
+                {"$match": {"level": level, "subject": subject}},
+                {"$group": {
+                    "_id": {"$trim": {"input": {"$ifNull": ["$chapter_name", ""]}}},
+                    "chapter_number": {"$first": "$chapter_number"}
+                }},
+                {"$match": {"_id": {"$ne": ""}}},
+                {"$sort": {"chapter_number": 1, "_id": 1}},
+            ]
+            chapters = [doc["_id"] for doc in col.aggregate(pipeline)]
+        finally:
+            client.close()
+        return jsonify(chapters)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/data/units", methods=["GET"])
+def get_units():
+    """Units for a given level + subject + chapter_name."""
+    level = request.args.get("level", "").strip()
+    subject = request.args.get("subject", "").strip()
+    chapter_name = request.args.get("chapter_name", "").strip()
+    if not level or not subject or not chapter_name:
+        return jsonify({"error": "level, subject, and chapter_name are required"}), 400
+    try:
+        client, col = _get_chunks_collection()
+        try:
+            pipeline = [
+                {"$match": {"level": level, "subject": subject, "chapter_name": chapter_name}},
+                {"$group": {
+                    "_id": "$unit_number",
+                    "unit_name": {"$first": {"$trim": {"input": {"$ifNull": ["$unit_name", ""]}}}}
+                }},
+                {"$match": {"_id": {"$ne": None}, "unit_name": {"$ne": ""}}},
+                {"$sort": {"_id": 1}},
+                {"$project": {"_id": 0, "unit_number": "$_id", "unit_name": 1}},
+            ]
+            units = list(col.aggregate(pipeline))
+        finally:
+            client.close()
+        return jsonify(units)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/data/capabilities", methods=["GET"])
+def get_capabilities():
+    """Returns supported MCQ question types, difficulties, and limits."""
+    return jsonify({
+        "question_types": [
+            {"value": "standard",      "label": "General MCQ"},
+            {"value": "case_scenario", "label": "Case Study Based MCQ"},
+        ],
+        "difficulties": [
+            {"value": "easy",      "label": "Easy"},
+            {"value": "medium",    "label": "Medium"},
+            {"value": "hard",      "label": "Hard"},
+            {"value": "very-hard", "label": "Very Hard"},
+        ],
+        "unit_selection_available": True,
+        "max_questions": {"standard": 10, "case_scenario": 6},
+    })
+
 
 @app.route("/query", methods=["POST"])
 def handle_query():
@@ -107,9 +241,15 @@ def generate_ca_mcq():
         difficulty = str(data.get("difficulty", "easy")).strip().lower()
         num_questions = data.get("num_questions") or data.get("numQuestions", 1)
 
-        # Case-scenario flag: accepts boolean true or string "true"
+        # Case-scenario flag: accepts boolean true, string "true",
+        # or question_type == "case_scenario"
         raw_cs = data.get("case_scenario", False)
-        is_case_scenario = raw_cs is True or str(raw_cs).strip().lower() == "true"
+        raw_qt = str(data.get("question_type", "standard")).strip().lower()
+        is_case_scenario = (
+            raw_cs is True
+            or str(raw_cs).strip().lower() == "true"
+            or raw_qt == "case_scenario"
+        )
 
         # Validate difficulty
         valid_difficulties = ["easy", "medium", "hard", "very-hard", "very_hard"]

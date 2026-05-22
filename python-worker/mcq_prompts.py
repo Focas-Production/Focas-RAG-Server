@@ -47,12 +47,200 @@ def normalize_subject_key(subject: str) -> str:
     return lower.replace(" ", "_")
 
 
-SYSTEM_PROMPT = """You are an ICAI exam question setter.
-Generate authentic, high-quality CA MCQs.
-Use ONLY provided content. No external facts.
-Use realistic Indian business context with rupee amounts.
-Integrate multiple concepts, require analysis, and include plausible distractors.
-Return JSON only."""
+SYSTEM_PROMPT = """You are a senior ICAI question paper setter with 20+ years of experience.
+You generate AUTHENTIC CA EXAM MCQs that appear in actual ICAI examinations.
+
+CORE RULES — NON-NEGOTIABLE:
+1. Use ONLY the provided source content. Zero external facts.
+2. Read the ENTIRE question scenario before computing anything.
+3. Every number, rate, and date required to solve the question MUST appear in the question text.
+4. The explanation must show step-by-step working and end with: ✅ Correct Answer: Option [X]
+5. Correct answer must match the option letter — verify before returning JSON.
+6. Return ONLY valid JSON. No markdown fences, no extra text."""
+
+
+# ── Numerical subject list — triggers rounding section in prompts ─────────────
+NUMERICAL_SUBJECTS = {
+    "accounting", "accounting_foundation", "advanced_accounts",
+    "cost_accounting", "cost_management_accounting", "financial_management",
+    "indirect_tax", "income_tax", "taxation",
+    "advanced_financial_management", "direct_tax_international", "financial_reporting",
+}
+
+
+def is_numerical_subject(subject_key: str) -> bool:
+    return subject_key in NUMERICAL_SUBJECTS
+
+
+def get_icai_subject_instruction(subject_key: str) -> str:
+    """Subject-specific ICAI exam guidance injected into every MCQ prompt."""
+    _map = {
+        "accounting_foundation": """ICAI FOUNDATION — ACCOUNTING:
+• Topics: Journal entries, Ledger, Trial Balance, Depreciation, Bank Reconciliation,
+  Bills of Exchange, Partnership Accounts, Company Accounts (Shares/Debentures),
+  Not-for-Profit, Incomplete Records.
+• State method (SLM / WDV) and date of asset purchase for depreciation questions.
+• For partnership: state profit-sharing ratio explicitly in the question.
+• DO NOT test GST — that belongs to the Indirect Tax subject.""",
+
+        "business_economics": """ICAI FOUNDATION — BUSINESS ECONOMICS:
+• Topics: Demand & Supply, Price Elasticity, Consumer Theory, Production & Cost,
+  Market Structures, National Income, Money & Banking, Indian Economy.
+• For elasticity calculations: state original and new price/quantity in the question.
+• For cost questions: distinguish Fixed / Variable / Total / Marginal cost clearly.
+• Reference the correct law/principle by name (e.g., "Law of Diminishing Marginal Utility").""",
+
+        "business_law": """ICAI FOUNDATION — BUSINESS LAW:
+• Acts to cover: Indian Contract Act 1872, Sale of Goods Act 1930,
+  Indian Partnership Act 1932, LLP Act 2008, Companies Act 2013, NI Act 1881.
+• Cite the relevant Act and section number in the explanation.
+• Scenario must have a clear legal question — validity, consequence, rights, or obligations.
+• Distractor options should use plausible but wrong sections or time limits.""",
+
+        "advanced_accounts": """ICAI INTERMEDIATE — ADVANCED ACCOUNTING:
+• Standards to use: AS-2, AS-6, AS-7, AS-9, AS-10, AS-11, AS-13, AS-14, AS-15,
+  AS-16, AS-17, AS-18, AS-19, AS-20, AS-21, AS-22, AS-23, AS-26, AS-28, AS-29.
+• Always name the applicable AS in the explanation (e.g., "As per AS-2…").
+• For consolidation: state % holding and nature of relationship.
+• For amalgamation: state which method (Pooling of Interests / Purchase).
+• DO NOT use Ind AS — those apply to the Final/Financial Reporting paper.""",
+
+        "auditing_ethics": """ICAI INTERMEDIATE — AUDITING AND ETHICS:
+• Standards to reference: SA 200, SA 210, SA 220, SA 230, SA 240, SA 250, SA 260,
+  SA 265, SA 299, SA 300, SA 315, SA 320, SA 330, SA 402, SA 450, SA 500–580,
+  SA 600, SA 610, SA 620, SA 700, SA 701, SA 705, SA 706, SA 710, SA 720, SQC 1.
+• Ethics: ICAI Code of Ethics — Independence (threats & safeguards), Objectivity,
+  Confidentiality, Professional Competence.
+• Questions must test APPLICATION, not definition recall.
+• Distractor options should be plausible audit procedures or wrong SA references.""",
+
+        "corporate_laws": """ICAI INTERMEDIATE — CORPORATE AND OTHER LAWS:
+• Acts: Companies Act 2013 (primary), LLP Act 2008, FEMA 1999, General Clauses Act.
+• Always cite the specific section number (e.g., "Section 149 of Companies Act 2013").
+• State specific thresholds, time limits, and penalties in the question.
+• Distractors: wrong section numbers or wrong time limits are ideal.""",
+
+        "cost_management_accounting": """ICAI INTERMEDIATE — COST AND MANAGEMENT ACCOUNTING:
+• Topics: Material/Labour/Overhead costing, Job/Batch/Process costing,
+  Standard costing & Variance analysis, Marginal costing & CVP, Budget & Budgetary control,
+  Activity-Based Costing, Service costing.
+• For variance: state Standard rate, Actual rate, Standard hours, Actual hours separately.
+• For process costing: state normal loss %, scrap value, and input/output units.
+• Explanation must show: Formula → Substitution → Result for EACH calculation step.""",
+
+        "financial_management": """ICAI INTERMEDIATE — FINANCIAL MANAGEMENT:
+• Topics: Capital budgeting (NPV/IRR/Payback/ARR), Capital structure (WACC, MM theory),
+  Dividend decisions, Working capital (EOQ, Cash management, Debtors management).
+• For NPV/IRR: provide year-wise cash flows and discount rate in the question.
+• State tax rate, depreciation method (SLM/WDV), and salvage value explicitly.
+• Round Present Value factors to 3 decimal places in explanation.""",
+
+        "indirect_tax": """ICAI INTERMEDIATE — INDIRECT TAX (GST):
+• Reference: CGST Act 2017, IGST Act 2017, relevant sections and rules.
+• Always state: supply type, GSTIN status (registered/unregistered),
+  interstate or intrastate, taxable/exempt/nil-rated.
+• Compute CGST + SGST for intrastate, IGST for interstate.
+• Key areas: Supply (Sec 7), Taxable value (Sec 15), ITC (Sec 16–17),
+  Registration (Sec 22), Time/Place of supply (Sec 12–13), Returns.
+• Rate must be stated: 0%, 5%, 12%, 18%, or 28%.""",
+
+        "income_tax": """ICAI INTERMEDIATE — INCOME TAX:
+• Use F.Y. 2024-25 / A.Y. 2025-26 unless otherwise specified.
+• State residential status of assessee (Resident/NR/RNOR).
+• Reference specific sections: Sec 17 (Salary), Sec 22-27 (HP), Sec 28-44 (PGBP),
+  Sec 45-55 (CG), Sec 80C–80U (Deductions), Sec 234A/B/C (Interest).
+• For deductions: state both the section and the limit amount.
+• Show tax computation in slab-wise format in explanation.""",
+
+        "strategic_management": """ICAI INTERMEDIATE — STRATEGIC MANAGEMENT:
+• Frameworks: SWOT, PESTLE, Porter's Five Forces, BCG Matrix, Ansoff Matrix,
+  Value Chain, Balanced Scorecard, McKinsey 7S, Strategic Clock.
+• Questions must test APPLICATION of frameworks to a given business scenario.
+• Options should represent different strategic alternatives or framework elements.
+• Avoid pure definition questions — test analysis and strategic judgment.""",
+
+        "advanced_financial_management": """ICAI FINAL — ADVANCED FINANCIAL MANAGEMENT:
+• Topics: Derivatives (Options, Futures, Swaps), Portfolio management (CAPM, APT, Markowitz),
+  Forex management (Hedging, Parity theorems), M&A valuation, Risk management,
+  Mutual funds, Securitisation, International capital budgeting.
+• For options: state Strike price, Spot price, Premium, Type (Call/Put), Expiry.
+• For CAPM: state Beta, Risk-free rate, Market return clearly.
+• For Forex: state Spot rate, Forward rate, Interest rates for both currencies.
+• Round forex to 4 decimal places; round portfolio returns to 2 decimal places.""",
+
+        "advanced_auditing": """ICAI FINAL — ADVANCED AUDITING AND ASSURANCE:
+• Standards: SAs (all), SQC 1, Engagement Standards (SSAE, SSRS), ICAI Code of Ethics.
+• Key areas: Group audit (SA 600), Going concern (SA 570), Fraud (SA 240),
+  Quality control (SQC 1), Forensic audit, Digital audit, ESG assurance.
+• Questions must demand expert professional judgment, not fact recall.
+• Scenario must include specific risk indicators, findings, or engagement details.""",
+
+        "direct_tax_international": """ICAI FINAL — DIRECT TAX AND INTERNATIONAL TAXATION:
+• Use F.Y. 2024-25 / A.Y. 2025-26 for domestic provisions.
+• For DTAA: reference UN Model / OECD Model Articles; state the treaty country.
+• Key areas: Residential status (Sec 6), DTAA application, Transfer pricing (Sec 92–92F),
+  GAAR (Sec 95-102), POEM, Place of effective management, Advance rulings.
+• State treaty article number in explanation (e.g., "Article 13 — Capital Gains").
+• Round all computations to nearest ₹.""",
+
+        "financial_reporting": """ICAI FINAL — FINANCIAL REPORTING (IND AS):
+• Use Ind AS, NOT the old AS standards.
+• Key Ind AS: Ind AS 1, 2, 7, 8, 10, 12, 16, 19, 23, 24, 28, 32, 36, 37, 38, 40,
+  Ind AS 101, 102, 103, 105, 108, 109, 110, 111, 112, 113, 115, 116.
+• Always cite the specific Ind AS number and paragraph in the explanation.
+• State measurement basis clearly: Fair Value / Amortised Cost / Cost model.
+• For consolidation: state % holding, control assessment, and NCI measurement method.""",
+
+        # Generic fallbacks
+        "taxation": """ICAI — TAXATION:
+• Test income computation, deductions, and tax liability.
+• State residential status, assessment year, and applicable sections.
+• Reference specific sections of the Income-tax Act 1961 or relevant GST provisions.""",
+
+        "auditing": """ICAI — AUDITING AND ASSURANCE:
+• Reference applicable Standards on Auditing (SA) issued by ICAI.
+• Test audit procedures, evidence, risk assessment, and professional judgment.
+• Questions must be application-based, not definition recall.""",
+
+        "accounting": """ICAI — FINANCIAL ACCOUNTING:
+• Reference applicable Accounting Standards (AS) or Ind AS.
+• Test accounting treatment, computation, and financial statement presentation.
+• Show journal entry format where required in explanation.""",
+
+        "law": """ICAI — BUSINESS LAW:
+• Reference specific Acts and section numbers.
+• Create a realistic scenario with a clear legal question.
+• State specific thresholds, deadlines, and monetary limits.""",
+
+        "cost_accounting": """ICAI — COST ACCOUNTING:
+• Test specific costing methods: Job, Batch, Process, Service, Standard costing.
+• Show formula → substitution → result in explanation.
+• State all cost data (rates, quantities, overheads) in the question.""",
+    }
+    return _map.get(subject_key, """ICAI GENERAL EXAM STANDARDS:
+• Test concepts explicitly from the provided source content.
+• Use realistic Indian business scenarios with ₹ amounts.
+• Show step-by-step working in explanation.
+• Reference applicable provisions/standards/sections.""")
+
+
+def get_rounding_section(subject_key: str) -> str:
+    """Returns rounding rules for numerical subjects — blank for conceptual ones."""
+    if not is_numerical_subject(subject_key):
+        return ""
+    forex = subject_key in {"advanced_financial_management", "direct_tax_international", "financial_management"}
+    extra = "\n• Forex / PV factors: round to 4 decimal places in intermediate steps." if forex else ""
+    return f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ROUNDING RULES — ICAI STANDARD (MANDATORY)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Round FINAL answer to nearest ₹ (whole number) unless the question explicitly
+  says "in lakhs/crores to 2 decimal places" or specifies decimal precision.
+• Intermediate calculations: keep 2 decimal places to avoid cascading errors.
+• All 4 option values MUST follow the SAME rounding convention.
+• A distractor caused ONLY by a different rounding choice is NOT acceptable —
+  it would make two options defensibly correct. Use wrong-formula or omitted-item
+  distractors instead.{extra}"""
 
 # ===== DIFFICULTY LEVEL DESCRIPTIONS =====
 
@@ -874,7 +1062,7 @@ def select_question_type(subject, difficulty, previous_types=None, chapter_name=
 
 def get_prompt(difficulty, context, chapter_number, chapter_name, unit_number, unit_name,
                subject_context, question_count=1, topic_name="", used_question_types=None):
-    """Generate compact, high-precision prompt for MCQ generation"""
+    """Generate ICAI-standard MCQ prompt with subject-specific guidance."""
     if used_question_types is None:
         used_question_types = []
 
@@ -882,27 +1070,28 @@ def get_prompt(difficulty, context, chapter_number, chapter_name, unit_number, u
     subject_name = subject_context.get("name", "")
     subject = normalize_subject_key(subject_name)
 
-    # Get subject config
     config = SUBJECT_CONFIGURATIONS.get(subject, SUBJECT_CONFIGURATIONS["business_economics"])
 
-    # Select question type appropriate for difficulty, avoiding recently used types
     question_type = select_question_type(
         subject, difficulty_lower, previous_types=used_question_types, chapter_name=chapter_name
     )
 
-    # Get template (only business_economics has question_templates; others use default)
-    template = config.get("question_templates", {}).get(question_type, "[{scenario}]. What is the correct answer based on the content?")
-    
-    # Get difficulty description
+    template = config.get("question_templates", {}).get(
+        question_type, "[{scenario}]. What is the correct answer based on the content?"
+    )
+
     diff_info = DIFFICULTY_DESCRIPTIONS.get(difficulty_lower, DIFFICULTY_DESCRIPTIONS["hard"])
-    
+
     avoid_repetition = (
         f"\n• AVOID REPETITION: Do NOT generate the same type of question as these "
         f"already-asked types: {used_question_types}. Test a different concept or angle."
         if used_question_types else ""
     )
 
-    prompt = f"""GENERATE CA EXAM MCQ — {diff_info['name']} LEVEL
+    icai_subject_guide = get_icai_subject_instruction(subject)
+    rounding_section = get_rounding_section(subject)
+
+    prompt = f"""GENERATE ICAI CA EXAM MCQ — {diff_info['name']} LEVEL
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SOURCE CONTENT  ← ONLY material you may use
@@ -917,23 +1106,30 @@ Topic   : {topic_name}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SCOPE GUARD — MANDATORY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• This question is for Subject: "{subject_name}", Chapter: "{chapter_name}".
-• Generate questions ONLY about concepts explicitly present in the SOURCE CONTENT above.
-• NEVER introduce GST / indirect tax questions when the subject is Accounting or Foundation Accounting.
-• NEVER introduce topics from other chapters, other subjects, or your training knowledge
-  that are not in the source content above.
-• If the source content contains GST examples only as illustration inside an Accounting
-  chapter, do NOT make the question about GST — make it about the accounting concept.{avoid_repetition}
+• Question is for Subject: "{subject_name}", Chapter: "{chapter_name}", Topic: "{topic_name}".
+• Generate questions ONLY about concepts EXPLICITLY present in the SOURCE CONTENT above.
+• NEVER introduce GST / indirect-tax questions when the subject is Accounting or
+  Foundation Accounting.
+• NEVER introduce topics from other chapters, other subjects, or your training data
+  that are absent from the source content above.
+• If GST appears as an illustration inside an Accounting chapter, make the question
+  about the accounting concept — NOT about GST.{avoid_repetition}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ICAI SUBJECT GUIDANCE — {subject_name.upper()}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{icai_subject_guide}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DIFFICULTY: {diff_info['name']}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {get_difficulty_instruction(difficulty_lower, subject)}
 Key traits: {', '.join(diff_info['characteristics'])}
-
+{rounding_section}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUESTION RULES — ALL MANDATORY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Read the ENTIRE question scenario before computing. Every data item matters.
 • Use a realistic Indian scenario with specific ₹ amounts where applicable.
 • Ask for exactly ONE value or conclusion. NEVER ask "find X and Y" together.
 • Every number, rate, and date needed to solve the question MUST appear in the
@@ -949,26 +1145,30 @@ QUESTION TEMPLATE HINT: {template}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ANSWER CONSTRUCTION — FOLLOW EXACTLY IN THIS ORDER:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 1 — SOLVE THE PROBLEM FIRST:
-   Perform every calculation step-by-step and arrive at the exact correct answer.
-   Write it down: e.g., "Correct answer = ₹80,000"
+STEP 1 — READ THE FULL QUESTION FIRST:
+   Re-read every line of the question. Note ALL given values and what is being asked.
+   Do NOT skip any data item — partial reading causes wrong answers.
 
-STEP 2 — CREATE OPTIONS:
+STEP 2 — SOLVE THE PROBLEM:
+   Perform every calculation step-by-step and arrive at the exact correct answer.
+   Note it: e.g., "Correct answer = ₹80,000"
+
+STEP 3 — CREATE OPTIONS:
    • Pick one letter from A/B/C/D at random and assign your correct answer to it.
      (Vary the position — do NOT always put the correct answer in option A.)
    • Fill the other 3 letters with WRONG values.
-     Wrong values must each represent a realistic mistake a student might make:
-     wrong formula, off-by-one step, sign error, omitted adjustment, etc.
-   • Every option value must be DIFFERENT from every other option value.
+     Each wrong value must represent a realistic student mistake:
+     wrong formula, off-by-one step, sign error, omitted adjustment, wrong rate, etc.
+   • Every option value must be DIFFERENT from every other.
 
-STEP 3 — SET correct_answer:
-   Set "correct_answer" to the EXACT LETTER (A, B, C, or D) of the option from
-   Step 2 that contains the correct value. Double-check it before writing JSON.
+STEP 4 — SET correct_answer:
+   Set "correct_answer" to the EXACT LETTER (A, B, C, or D) containing the correct
+   value from Step 2. Double-check before writing JSON.
 
-STEP 4 — VERIFY BEFORE WRITING JSON:
-   (a) Read options[correct_answer]. Does it contain your Step 1 answer? If not — fix it.
-   (b) Do all 4 option values differ? If any two are the same — replace the duplicate.
-   (c) Is every number/rate needed to solve the question stated in the question text?
+STEP 5 — VERIFY BEFORE WRITING JSON:
+   (a) Read options[correct_answer letter]. Does it match Step 2? If not — fix it.
+   (b) Do all 4 option values differ? Replace any duplicate.
+   (c) Is every number/rate needed stated in the question text?
    (d) Does the explanation end with "✅ Correct Answer: Option [X]" where X = correct_answer?
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -980,7 +1180,7 @@ RESPONSE — Return ONLY valid JSON (no markdown, no extra text):
   "question": "Full question text with ALL data needed to solve it.",
   "options": ["A: ...", "B: ...", "C: ...", "D: ..."],
   "correct_answer": "X",
-  "explanation": "Step 1: ... Step 2: ... [full working] ... Option Y is wrong because ... Option Z is wrong because ... ✅ Correct Answer: Option X"
+  "explanation": "Step 1: [read scenario — list all given values]. Step 2: [full working step by step]. Option Y is wrong because [specific reason]. Option Z is wrong because [specific reason]. ✅ Correct Answer: Option X"
 }}"""
 
     return prompt
@@ -1274,10 +1474,7 @@ def get_case_scenario_prompt(
     difficulty, context, chapter_number, chapter_name,
     unit_number, unit_name, subject_context, num_questions=4, topic_name=""
 ):
-    """
-    Generate ICAI-standard case scenario MCQ prompt.
-    The LLM will produce ONE shared narrative + num_questions related MCQs.
-    """
+    """Generate ICAI-standard case scenario MCQ prompt with subject-specific guidance."""
     difficulty_lower = difficulty.lower().replace("-", "_")
     subject_key = normalize_subject_key(subject_context.get("name", ""))
 
@@ -1309,25 +1506,24 @@ def get_case_scenario_prompt(
     complexity_instruction = complexity_map.get(difficulty_lower, complexity_map["hard"])
 
     subject_name_display = subject_context.get("name", subject_key)
+    icai_subject_guide = get_icai_subject_instruction(subject_key)
+    rounding_section = get_rounding_section(subject_key)
 
-    prompt = f"""GENERATE ICAI EXAM CASE SCENARIO MCQ SET — {diff_info['name']} LEVEL
+    prompt = f"""GENERATE ICAI CA EXAM CASE SCENARIO MCQ SET — {diff_info['name']} LEVEL
 
-You are an ICAI exam paper setter. Create a publication-ready CASE SCENARIO \
-with exactly {num_questions} MCQs strictly following the ICAI format shown below.
+You are a senior ICAI exam paper setter. Create a publication-ready CASE SCENARIO
+with exactly {num_questions} MCQs in authentic ICAI examination format.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️  MANDATORY RULE — READ BEFORE ANYTHING ELSE
+⚠️  MANDATORY — READ BEFORE ANYTHING ELSE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 The SOURCE CONTENT below is the ONLY material you may use.
-• Read the source content first. Identify the core concepts, facts, and
-  terminology it contains.
-• Your case scenario narrative and ALL questions MUST be derived from those
-  concepts — not from your training knowledge about the subject in general.
+• Read the full source content first; identify its core concepts and terminology.
 • TOPIC to test: "{topic_name}"
+• Your narrative and ALL questions MUST derive from that topic in the source content.
 • If the source content is about technology (AI, ERP, Blockchain, RPA, etc.),
-  the scenario MUST be about that technology — NOT about unrelated accounting
-  standards, tax computations, or legal provisions.
-• Do NOT introduce any topic that is absent from the source content.
+  the scenario MUST be about that technology — NOT unrelated standards or tax law.
+• Do NOT introduce any topic absent from the source content.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SOURCE CONTENT  ← derive every fact from here
@@ -1340,7 +1536,12 @@ Subject : {subject_name_display}
 {context}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STYLE GUIDELINES  (format/presentation only — topic is fixed by source above)
+ICAI SUBJECT GUIDANCE — {subject_name_display.upper()}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{icai_subject_guide}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STYLE GUIDELINES  (presentation format — topic fixed by source above)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {subject_config['style_guide']}
 
@@ -1350,36 +1551,38 @@ CASE SCENARIO COMPLEXITY — {diff_info['name']}
 {complexity_instruction}
 Key traits: {', '.join(diff_info['characteristics'])}
 {get_difficulty_instruction(difficulty_lower, subject_key)}
-
+{rounding_section}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ICAI FORMAT REQUIREMENTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CASE SCENARIO NARRATIVE:
   • Realistic Indian person/entity name in a context related to "{topic_name}"
-  • Include a formatted data table (Particulars | Details/Value) using numbers
-    or facts drawn directly from the source content
+  • Include a formatted data table (Particulars | Amount/Details) drawn from source content
   • All facts internally consistent and arithmetically accurate
   • Narrative sufficient to answer ALL {num_questions} questions (200–400 words)
   • Do NOT label any data item as "Red Herring" — distractors must look natural
 
 MCQ QUESTIONS ({num_questions} total):
+  • Read the ENTIRE narrative before setting questions — use ALL relevant data items
   • Each question asks for exactly ONE value or conclusion
-    (NEVER "find X and Y" together — each sub-question gets its own MCQ)
-  • All questions test concepts present in the source content about "{topic_name}"
+    (NEVER "find X and Y" together — give each its own question)
+  • All questions test concepts from the source content about "{topic_name}"
   • Questions progress from foundational → advanced understanding of the topic
   • Q3 onward MAY introduce "Assume for this question that…" modifications
-  • Each question: exactly 4 options (A–D); all 4 option values must differ
-  • Correct answer requires reasoning or computation based on the source content
-  • Distractors represent common calculation errors or misconceptions — NOT labeled
-  • Explanation: step-by-step reasoning (100–160 words) ending with:
+  • Each question: exactly 4 options (A–D); all 4 values must differ
+  • Correct answer requires reasoning/computation from the narrative
+  • Distractors = common calculation errors or concept misconceptions — NOT labeled
+  • Explanation: step-by-step working (100–160 words) ending with:
     "✅ Correct Answer: Option [X]"
 
 ANSWER CONSTRUCTION (for EACH question):
-  STEP 1 — Compute the correct answer precisely.
-  STEP 2 — Place it in one of A/B/C/D (vary the position across questions).
-  STEP 3 — Fill remaining 3 with distinct wrong values (plausible mistakes).
-  STEP 4 — Set correct_answer to the LETTER containing the correct value.
-  STEP 5 — Verify: read options[correct_answer letter] — does it match Step 1?
+  STEP 1 — Re-read the narrative. List ALL data items relevant to this question.
+  STEP 2 — Compute the correct answer step-by-step.
+  STEP 3 — Place it in one of A/B/C/D (vary position across questions).
+  STEP 4 — Fill remaining 3 with distinct wrong values (plausible mistakes:
+            wrong formula, wrong rate, omitted item, sign error).
+  STEP 5 — Set correct_answer to the LETTER containing the Step 2 result.
+  STEP 6 — Verify: read options[correct_answer letter] — does it match Step 2?
             If not, swap the answer into the right option and update the letter.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1394,7 +1597,7 @@ RESPONSE — Return ONLY valid JSON (no markdown, no extra text):
       "question": "Based on the above case scenario, [specific question about {topic_name}]?",
       "options": ["A: ...", "B: ...", "C: ...", "D: ..."],
       "correct_answer": "A",
-      "explanation": "Step 1: ... Step 2: ... [full working] ... Option B is wrong because ... ✅ Correct Answer: Option A",
+      "explanation": "Step 1: [list all relevant data from narrative]. Step 2: [full working] ... Option B is wrong because [specific reason]. ✅ Correct Answer: Option A",
       "difficulty": "{difficulty}"
     }},
     {{
@@ -1408,7 +1611,7 @@ RESPONSE — Return ONLY valid JSON (no markdown, no extra text):
   ]
 }}
 
-CRITICAL: Questions must be based ONLY on the source content provided. Every answer must be verifiable from the source content above."""
+CRITICAL: Every answer must be derivable solely from the source content and narrative above."""
 
     return prompt
 
