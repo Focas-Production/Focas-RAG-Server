@@ -51,122 +51,122 @@ MODEL_PRICING_PER_1K = {
 }
 
 # ── Model strategy ──────────────────────────────────────────────────────────
-# gpt-4.1-mini: newer architecture, better instruction-following and arithmetic
-# than gpt-4o-mini at comparable cost.  Used for all subjects.
+# gpt-4.1: used for all subjects.
+#   - Significantly better multi-step arithmetic than gpt-4.1-mini
+#   - Eliminates the "closest option" bug where the smaller model computed
+#     approximate values and picked the nearest wrong option
 #
 # Temperature guide:
-#   Numerical subjects (Accounting, Costing, Tax, FM, Advanced Accounts):
-#     → 0.3  — lower variance reduces arithmetic errors
-#   Conceptual/analytical subjects (Law, Auditing, SM, Economics):
-#     → 0.5  — moderate creativity for diverse scenario framing
+#   Numerical subjects: 0.1 — minimal randomness for deterministic calculations
+#   Conceptual subjects: 0.4 — moderate creativity for scenario framing
 # ────────────────────────────────────────────────────────────────────────────
 
 SUBJECT_CONFIG = {
-    # ── Generic fallback keys (kept for backward compatibility) ────────────────
+    # ── Generic fallback keys ──────────────────────────────────────────────────
     "business_economics": {
-        "temperature": 0.5,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.4,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "accounting": {
-        "temperature": 0.3,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.1,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "auditing": {
-        "temperature": 0.5,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.4,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "taxation": {
-        "temperature": 0.3,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.1,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "law": {
-        "temperature": 0.5,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.4,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "cost_accounting": {
-        "temperature": 0.3,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.1,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 
     # ── Foundation ─────────────────────────────────────────────────────────────
     "business_law": {
-        "temperature": 0.5,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.4,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "accounting_foundation": {
-        "temperature": 0.3,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.1,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 
     # ── Intermediate ───────────────────────────────────────────────────────────
     "advanced_accounts": {
-        "temperature": 0.3,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.1,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "auditing_ethics": {
-        "temperature": 0.5,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.4,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "corporate_laws": {
-        "temperature": 0.5,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.4,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "cost_management_accounting": {
-        "temperature": 0.3,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.1,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "financial_management": {
-        "temperature": 0.3,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.1,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "indirect_tax": {
-        "temperature": 0.3,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.1,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "income_tax": {
-        "temperature": 0.3,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.1,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "strategic_management": {
-        "temperature": 0.5,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.4,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 
     # ── Final ──────────────────────────────────────────────────────────────────
     "advanced_financial_management": {
-        "temperature": 0.3,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.1,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "advanced_auditing": {
-        "temperature": 0.5,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.4,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "direct_tax_international": {
-        "temperature": 0.3,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.1,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
     "financial_reporting": {
-        "temperature": 0.3,
-        "model": "gpt-4.1-mini",
+        "temperature": 0.1,
+        "model": "gpt-4.1",
         "max_tokens": DEFAULT_MAX_TOKENS,
     },
 }
@@ -365,7 +365,7 @@ def fetch_topic_chunks_optimized(level, subject, chapter_name, unit_name, topic_
 
         # Debug: confirm actual stored values
         first = chunks[0]
-        print(f"   DB values — level='{level}' subject='{first.get('subject')}' chapter='{first.get('chapter_name')}'")
+        print(f"   DB values — level='{level}' subject='{subject}' chapter='{first.get('chapter_name')}'")
 
         metadata = {
             "chapter_number": first.get("chapter_number"),
@@ -417,29 +417,56 @@ def fetch_topic_chunks_optimized(level, subject, chapter_name, unit_name, topic_
         if client:
             client.close()
 
+_EXPLORATION_SIGNALS = (
+    "not matching",
+    "not match",
+    "alternatively, perhaps",
+    "alternatively, maybe",
+    "let's check if",
+    "let us check if",
+    "still not matching",
+    "does not match",
+    "none of the options match",
+    "options do not match",
+    "options are not matching",
+)
+
+
 def parse_mcq_response(response_text):
-    """Parse MCQ JSON response from LLM with robust error handling."""
+    """Parse MCQ JSON response from LLM with robust error handling.
+
+    Fast-fails (returns None) if the response contains exploration-loop signals
+    — phrases like 'Alternatively, perhaps' or 'not matching' indicate the LLM
+    got confused about its own options and is burning tokens trying alternatives.
+    Returning None here triggers a retry with a fresh prompt.
+    """
+    lower = response_text.lower()
+    for signal in _EXPLORATION_SIGNALS:
+        if signal in lower:
+            print(f"   ❌ LLM entered exploration loop ('{signal}') — discarding response")
+            return None
+
     response_text = response_text.strip()
-    
+
     # Try to extract JSON from markdown code blocks
     if "```json" in response_text:
         response_text = response_text.split("```json")[1].split("```")[0].strip()
     elif "```" in response_text:
         response_text = response_text.split("```")[1].split("```")[0].strip()
-    
+
     try:
         return json.loads(response_text)
     except json.JSONDecodeError:
         # Try to find JSON object
         start = response_text.find("{")
         end = response_text.rfind("}") + 1
-        
+
         if start != -1 and end > start:
             try:
                 return json.loads(response_text[start:end])
             except:
                 return None
-    
+
     return None
 
 _LABEL_RE = re.compile(r"^[A-D]\s*[\)\:\.\-]\s*", re.IGNORECASE)
@@ -472,14 +499,16 @@ def _extract_numbers(text: str):
 def detect_closest_option_bug(mcq: dict) -> tuple:
     """
     Detects the 'closest option' bug: LLM computes ₹X in the explanation but
-    the correct option contains a DIFFERENT value (the nearest wrong option).
+    no option contains ₹X, and the correct option is a nearby wrong value.
 
     Strategy:
-    1. Extract numbers from the last working sentence of the explanation
-       (before the ✅ anchor).
-    2. Extract numbers from the correct option text.
-    3. If the dominant number in the explanation's final step is NOT in the
-       correct option (within 0.5% tolerance), flag it.
+    1. Find the last number in the explanation's working section (before ✅).
+       Using the last number (by position) avoids false positives from large
+       intermediate values in multi-step calculations (e.g. total cost ₹60L
+       appearing before a final depletion of ₹14L).
+    2. Check if that value appears in ANY of the 4 options.
+    3. Only flag if the explanation's final value is absent from all options
+       AND the correct option contains a meaningfully different value.
 
     Returns (bug_detected: bool, detail: str).
     """
@@ -499,30 +528,121 @@ def detect_closest_option_bug(mcq: dict) -> tuple:
     # Use only the part of the explanation BEFORE the anchor
     anchor_idx = explanation.find("✅")
     work_text = explanation[:anchor_idx] if anchor_idx != -1 else explanation
-    # Focus on the last 300 chars where the final computed value usually appears
-    work_snippet = work_text[-300:] if len(work_text) > 300 else work_text
+    # Last 200 chars — closer to the actual computed answer
+    work_snippet = work_text[-200:] if len(work_text) > 200 else work_text
 
-    expl_nums = _extract_numbers(work_snippet)
-    opt_nums  = _extract_numbers(correct_opt_text)
+    # Collect numbers in order of appearance (not sorted by value)
+    expl_ordered = []
+    for m in _NUMBER_RE.finditer(work_snippet):
+        v = _normalise_number(m.group(0))
+        if not (v != v) and v > 0:  # skip NaN and zero
+            expl_ordered.append(v)
 
-    if not expl_nums or not opt_nums:
+    opt_nums = _extract_numbers(correct_opt_text)
+
+    if not expl_ordered or not opt_nums:
         return False, "no numbers to compare"
 
-    # The largest number in the explanation snippet is usually the final answer
-    main_expl_val = max(expl_nums)
+    # Last number by position is the most likely final computed answer
+    main_expl_val = expl_ordered[-1]
     main_opt_val  = max(opt_nums)
 
-    # Allow 0.5% tolerance for minor formatting differences
     if main_opt_val == 0:
         return False, "zero value — skip"
+
     diff_pct = abs(main_expl_val - main_opt_val) / max(abs(main_opt_val), 1) * 100
-    if diff_pct > 0.5 and abs(main_expl_val - main_opt_val) > 1:
-        return (
-            True,
-            f"explanation computed {main_expl_val:,.2f} but correct option "
-            f"({correct_letter}) contains {main_opt_val:,.2f} — possible 'closest option' bug"
-        )
-    return False, "ok"
+    if diff_pct <= 0.5 or abs(main_expl_val - main_opt_val) <= 1:
+        return False, "ok"
+
+    # Only flag if the explanation's final value is absent from ALL options —
+    # multi-step problems legitimately have intermediate values that don't
+    # appear in any option (they're just calculation steps, not the answer).
+    all_opt_text = " ".join(str(o) for o in options)
+    all_opt_nums = _extract_numbers(all_opt_text)
+    if any(
+        abs(main_expl_val - n) / max(abs(n), 1) * 100 < 0.5
+        for n in all_opt_nums
+    ):
+        return False, "explanation value found in options — ok"
+
+    return (
+        True,
+        f"explanation computed {main_expl_val:,.2f} but this value is absent "
+        f"from all 4 options; correct option ({correct_letter}) contains "
+        f"{main_opt_val:,.2f} — possible 'closest option' bug"
+    )
+
+_EQ_VAL_RE = re.compile(
+    r"=\s*(?:Rs\.?\s*|₹\s*)?(\d{1,3}(?:,\d{2,3})*(?:\.\d+)?|\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+
+
+def _numerical_autocorrect(mcq: dict):
+    """
+    Catch label-confusion bugs: explanation correctly computes ₹X but then
+    refers to the wrong option letter as containing ₹X (e.g., LLM says
+    'Option B is ₹6,00,000' when Option B is actually ₹12,00,000).
+
+    Strategy:
+    1. Strip the 'Option X is…' discussion section and the ✅ anchor.
+    2. Find the last '= ₹X' computed value in the pure calculation text.
+    3. If the correct option does NOT contain that value but another option
+       does, return that letter for auto-correction.
+    Returns the corrected letter, or None if no correction is needed.
+    """
+    explanation = mcq.get("explanation", "")
+    correct_letter = str(mcq.get("correct_answer", "")).strip().upper()
+    options = mcq.get("options", [])
+
+    if not explanation or correct_letter not in {"A", "B", "C", "D"}:
+        return None
+
+    # Cut off at ✅ anchor
+    anchor_idx = explanation.find("✅")
+    work_text = explanation[:anchor_idx] if anchor_idx != -1 else explanation
+
+    # Strip the option-discussion section ("Option A is…", "Option B is…")
+    opt_discuss = re.search(
+        r"\bOption\s+[A-D]\s+(?:is|shows|gives|represents|would|will)\b",
+        work_text,
+        re.IGNORECASE,
+    )
+    if opt_discuss:
+        work_text = work_text[: opt_discuss.start()]
+
+    # Find the last "= ₹X" or "= X" in the pure calculation text
+    eq_matches = list(_EQ_VAL_RE.finditer(work_text))
+    if not eq_matches:
+        return None
+
+    last_computed = _normalise_number(eq_matches[-1].group(1))
+    if last_computed != last_computed or last_computed == 0:  # NaN / zero
+        return None
+
+    # If the correct option already contains this value, no fix needed
+    correct_opt_text = next(
+        (o for o in options if str(o).strip().upper().startswith(correct_letter)), ""
+    )
+    correct_nums = _extract_numbers(correct_opt_text)
+    if any(abs(last_computed - n) / max(abs(n), 1) * 100 < 0.5 for n in correct_nums):
+        return None
+
+    # Find which other option matches the computed value
+    for opt in options:
+        opt_text = str(opt).strip()
+        m = re.match(r"^([A-D])\s*[:\)\.\-]\s*", opt_text, re.IGNORECASE)
+        if not m:
+            continue
+        letter = m.group(1).upper()
+        if letter == correct_letter:
+            continue
+        opt_nums = _extract_numbers(opt_text)
+        if any(abs(last_computed - n) / max(abs(n), 1) * 100 < 0.5 for n in opt_nums):
+            return letter
+
+    return None
+
 
 # Patterns that signal which option the explanation declares correct.
 # Ordered from most-specific to least-specific.
@@ -551,18 +671,31 @@ def extract_stated_answer_from_explanation(explanation: str):
 
 def try_autocorrect_answer(mcq: dict) -> dict:
     """
-    If correct_answer disagrees with the letter stated in the explanation,
-    attempt to fix correct_answer to match the explanation.
+    Two-stage fix for wrong correct_answer:
+    1. Letter mismatch: explanation explicitly states a different option letter.
+    2. Label confusion: explanation computes ₹X but marks the wrong option
+       (e.g., computes ₹6,00,000 but labels Option B as correct when
+       ₹6,00,000 is actually Option A).
     Returns the (possibly corrected) mcq dict.
     """
     explanation = mcq.get("explanation", "")
     current = str(mcq.get("correct_answer", "")).strip().upper()
-    stated = extract_stated_answer_from_explanation(explanation)
 
+    # Stage 1 — letter stated in explanation
+    stated = extract_stated_answer_from_explanation(explanation)
     if stated and stated != current and stated in {"A", "B", "C", "D"}:
         print(f"   ⚠️  Answer mismatch detected: correct_answer='{current}' but explanation states '{stated}'")
         print(f"   🔧 Auto-correcting correct_answer → '{stated}'")
         mcq["correct_answer"] = stated
+        return mcq
+
+    # Stage 2 — numerical label-confusion fix
+    num_fix = _numerical_autocorrect(mcq)
+    if num_fix:
+        print(f"   ⚠️  Label confusion: computed value matches option {num_fix}, not {current}")
+        print(f"   🔧 Auto-correcting correct_answer → '{num_fix}'")
+        mcq["correct_answer"] = num_fix
+
     return mcq
 
 
@@ -594,7 +727,15 @@ def validate_mcq(mcq):
     # Cross-check: does the explanation agree with correct_answer?
     stated = extract_stated_answer_from_explanation(mcq.get("explanation", ""))
     if stated and stated != correct:
-        return False, f"Explanation states '{stated}' is correct but correct_answer is '{correct}'"
+        # Before rejecting, verify numerically. If the numerical computation
+        # independently selects `correct` (e.g., explanation says 'Option B'
+        # but computed ₹6,00,000 is Option A and correct_answer was fixed to A
+        # by the label-confusion autocorrect), trust the numbers over the label.
+        num_confirm = _numerical_autocorrect({**mcq, "correct_answer": stated})
+        if num_confirm == correct:
+            pass  # numerical computation overrides the confabulated letter
+        else:
+            return False, f"Explanation states '{stated}' is correct but correct_answer is '{correct}'"
 
     # Detect "closest option" bug: explanation computes X but correct option contains Y
     bug, detail = detect_closest_option_bug(mcq)
@@ -811,51 +952,64 @@ def generate_multiple_mcqs(level, subject, chapter_name, num_questions=1,
         print(f"📝 MCQ {question_num}/{num_questions}")
         print(f"{'='*70}")
 
-        try:
-            # Select BEST available topic (different from previously used ones)
-            selected_topic = select_best_topic_for_mcq(
-                topics_list, exclude_topics=used_topics, prefer_complex=True
-            )
+        # Try up to 3 different topics per question — if one topic consistently
+        # triggers exploration loops, fall back to the next best topic.
+        max_topic_fallbacks = min(3, len(topics_list))
+        mcq = None
 
-            if not selected_topic:
-                print(f"⚠️ No more topics available")
-                break
+        for topic_attempt in range(max_topic_fallbacks):
+            try:
+                # Select BEST available topic (different from previously used ones)
+                selected_topic = select_best_topic_for_mcq(
+                    topics_list, exclude_topics=used_topics, prefer_complex=True
+                )
 
-            used_topics.append(selected_topic["name"])
+                if not selected_topic:
+                    print(f"⚠️ No more topics available")
+                    break
 
-            # Fetch OPTIMIZED chunks for this topic
-            print(f"\n📚 Fetching comprehensive content for MCQ generation...")
-            context, metadata = fetch_topic_chunks_optimized(
-                level, subject, chapter_name, unit_name,
-                selected_topic["name"]
-            )
+                used_topics.append(selected_topic["name"])
 
-            if not context or metadata is None:
-                print(f"⚠️ Skipping topic - no content retrieved")
-                continue
+                if topic_attempt > 0:
+                    print(f"🔁 Topic fallback {topic_attempt}/{max_topic_fallbacks - 1} — trying '{selected_topic['name']}'")
 
-            # Generate MCQ for this topic
-            mcq = generate_mcq(
-                level, subject, chapter_name,
-                difficulty=difficulty,
-                unit_name=unit_name,
-                question_number=question_num,
-                topic_data=(context, metadata),
-                used_question_types=used_question_types,
-            )
+                # Fetch OPTIMIZED chunks for this topic
+                print(f"\n📚 Fetching comprehensive content for MCQ generation...")
+                context, metadata = fetch_topic_chunks_optimized(
+                    level, subject, chapter_name, unit_name,
+                    selected_topic["name"]
+                )
 
-            if mcq:
-                mcqs.append(mcq)
-                q_type = mcq.get("question_type")
-                if q_type:
-                    used_question_types.append(q_type)
-                print(f"\n✅ Successfully generated MCQ #{question_num}")
+                if not context or metadata is None:
+                    print(f"⚠️ Skipping topic - no content retrieved")
+                    continue
 
-        except Exception as e:
-            print(f"❌ Error generating MCQ {question_num}: {e}")
-            import traceback
-            traceback.print_exc()
-            continue
+                # Generate MCQ for this topic
+                mcq = generate_mcq(
+                    level, subject, chapter_name,
+                    difficulty=difficulty,
+                    unit_name=unit_name,
+                    question_number=question_num,
+                    topic_data=(context, metadata),
+                    used_question_types=used_question_types,
+                )
+
+                if mcq:
+                    break  # Success — stop trying more topics for this question
+
+                print(f"⚠️ Topic '{selected_topic['name']}' failed all retries — trying next topic")
+
+            except Exception as e:
+                print(f"❌ Error generating MCQ {question_num}: {e}")
+                import traceback
+                traceback.print_exc()
+
+        if mcq:
+            mcqs.append(mcq)
+            q_type = mcq.get("question_type")
+            if q_type:
+                used_question_types.append(q_type)
+            print(f"\n✅ Successfully generated MCQ #{question_num}")
     
     # Summary
     print(f"\n{'#'*70}")

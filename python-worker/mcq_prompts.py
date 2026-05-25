@@ -1162,12 +1162,21 @@ ANSWER CONSTRUCTION — YOU ARE THE AUTHOR OF ALL OPTIONS
 ✅ CORRECT APPROACH:
    Compute ₹50,000 → write ₹50,000 into one slot → fill other 3 with wrong values.
 
-STEP 1 — RE-READ THE QUESTION COMPLETELY:
-   List every given value, rate, date used in computation. Miss nothing.
+BACKWARDS DESIGN (for numerical questions — do this BEFORE writing question text):
+   Step A — Pick the target answer value. E.g., "Correct answer will be ₹1,08,000."
+   Step B — Design the scenario numbers to PRODUCE ₹1,08,000 when calculated correctly.
+            Work the maths in reverse: if Profit = ₹1,08,000, Sales = ?, Cost = ?...
+   Step C — Verify forward: compute step-by-step from scenario data → confirm = ₹1,08,000.
+   ONLY THEN write the question text with those numbers.
+   WHY: Writing scenario data first then computing the answer often produces a value
+        that doesn't match any option — causing an exploration loop. Design backwards.
 
-STEP 2 — SOLVE COMPLETELY:
-   Work every calculation step. Arrive at the EXACT answer.
-   Write it clearly: "My computed answer = ₹X" (or whatever unit).
+STEP 1 — WRITE THE QUESTION with the scenario data from Backwards Design above.
+   List every given value clearly. No missing information.
+
+STEP 2 — CONFIRM THE ANSWER:
+   Solve from the question text step by step. Write: "My computed answer = ₹X".
+   ₹X must equal the value from Backwards Design Step A.
 
 STEP 3 — CHOOSE THE CORRECT OPTION SLOT:
    Pick a random letter (A / B / C / D). Vary across questions — not always the same.
@@ -1189,9 +1198,15 @@ STEP 6 — MANDATORY SELF-CHECK (do this out loud before writing JSON):
     My correct_answer is [L].
     Text of option [L] is: [read it].
     Does option [L] contain exactly ₹X? YES / NO"
-   → If NO: fix option [L] to say ₹X. Do NOT continue until YES.
+   → If NO: IMMEDIATELY rewrite option [L] text to contain ₹X. Then proceed.
+   → BANNED PHRASES — never write these in the explanation:
+     ✗ "Alternatively, perhaps..."     ✗ "Let's check if..."
+     ✗ "not matching"                  ✗ "Still not matching"
+     ✗ "none of the options match"     ✗ "does not match"
+     If your computed ₹X does not appear in any option, YOU wrote the wrong options.
+     The fix is ONE action: rewrite option [L] to say ₹X. No exploration needed.
    → If the explanation ends with "✅ Correct Answer: Option [L]", that letter
-     MUST be the one containing ₹X. If it is not, you have a bug — fix it.
+     MUST be the one containing ₹X. If it is not, rewrite option [L] — done.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RESPONSE — Return ONLY valid JSON (no markdown, no extra text):
@@ -1611,7 +1626,8 @@ ANSWER CONSTRUCTION — FOR EACH QUESTION (YOU ARE THE AUTHOR OF ALL OPTIONS):
   STEP 4 — options[letter] = ₹X exactly. Other 3 = distinct plausible wrong values.
   STEP 5 — Set correct_answer = the letter from Step 3.
   STEP 6 — Self-check: "Does options[correct_answer] contain exactly ₹X? YES/NO"
-           → If NO: fix the option before writing JSON.
+           → If NO: IMMEDIATELY rewrite options[correct_answer] to contain ₹X.
+             Do NOT re-derive. Do NOT try "alternatively". Just fix and continue.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RESPONSE — Return ONLY valid JSON (no markdown, no extra text):
