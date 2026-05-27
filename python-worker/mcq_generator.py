@@ -30,9 +30,29 @@ if not OPENAI_API_KEY or not MONGO_URI:
     raise ValueError("Missing OPENAI_API_KEY or MONGO_URI in environment")
 
 # ===== SUBJECT-SPECIFIC LLM CONFIGURATIONS =====
-DEFAULT_MAX_TOKENS = int(os.getenv("MCQ_MAX_OUTPUT_TOKENS", "900"))
-DEFAULT_CONTEXT_TOKENS = int(os.getenv("MCQ_CONTEXT_TOKENS", "6000"))
+DEFAULT_MAX_TOKENS = int(os.getenv("MCQ_MAX_OUTPUT_TOKENS", "2000"))
+DEFAULT_CONTEXT_TOKENS = int(os.getenv("MCQ_CONTEXT_TOKENS", "4000"))
 DEFAULT_MAX_CHUNKS = int(os.getenv("MCQ_MAX_CHUNKS", "10"))
+
+# Conceptual subjects (no heavy arithmetic) use a smaller token budget.
+# Saves ~40% cost vs numerical subjects without hurting quality.
+CONCEPTUAL_MAX_TOKENS = int(os.getenv("MCQ_CONCEPTUAL_MAX_OUTPUT_TOKENS", "1200"))
+CONCEPTUAL_CONTEXT_TOKENS = int(os.getenv("MCQ_CONCEPTUAL_CONTEXT_TOKENS", "2500"))
+
+_CONCEPTUAL_SUBJECTS = {
+    "business_economics", "auditing", "law", "business_law",
+    "auditing_ethics", "corporate_laws", "strategic_management", "advanced_auditing",
+}
+
+
+def _max_tokens_for_subject(subject_key: str) -> int:
+    return CONCEPTUAL_MAX_TOKENS if subject_key in _CONCEPTUAL_SUBJECTS else DEFAULT_MAX_TOKENS
+
+
+def _context_tokens_for_subject(subject_key: str) -> int:
+    return CONCEPTUAL_CONTEXT_TOKENS if subject_key in _CONCEPTUAL_SUBJECTS else DEFAULT_CONTEXT_TOKENS
+
+
 DEFAULT_COST_PER_1K_INPUT = float(os.getenv("MCQ_COST_PER_1K_INPUT", "0"))
 DEFAULT_COST_PER_1K_OUTPUT = float(os.getenv("MCQ_COST_PER_1K_OUTPUT", "0"))
 
@@ -173,17 +193,19 @@ SUBJECT_CONFIG = {
 
 def get_llm_for_subject(subject):
     """Get subject-specific LLM configuration"""
-    config = SUBJECT_CONFIG.get(normalize_subject_key(subject), SUBJECT_CONFIG["business_economics"])
-    
+    subject_key = normalize_subject_key(subject)
+    config = SUBJECT_CONFIG.get(subject_key, SUBJECT_CONFIG["business_economics"])
+
     model = os.getenv("LLM_MODEL", config["model"])
+    max_tokens = _max_tokens_for_subject(subject_key)
     llm = ChatOpenAI(
         openai_api_key=OPENAI_API_KEY,
         model_name=model,
         temperature=config["temperature"],
-        max_tokens=config["max_tokens"],
-        timeout=120  # Increased timeout for complex generation
+        max_tokens=max_tokens,
+        timeout=120
     )
-    config = {**config, "model": model}
+    config = {**config, "model": model, "max_tokens": max_tokens}
     return llm, config
 
 def extract_token_usage(response):
@@ -314,17 +336,22 @@ def select_best_topic_for_mcq(topics_list, exclude_topics=None, prefer_complex=T
     
     return best_topic
 
-def fetch_topic_chunks_optimized(level, subject, chapter_name, unit_name, topic_name):
+def fetch_topic_chunks_optimized(level, subject, chapter_name, unit_name, topic_name,
+                                  context_tokens=None):
     """
     Fetch chunks for a specific topic with a strict token budget.
     Ensures broad coverage while keeping cost under control.
-    
+
     Args:
         topic_name: The topic_name to fetch
-    
+        context_tokens: Override the global DEFAULT_CONTEXT_TOKENS cap.
+                        Pass _context_tokens_for_subject(subject_key) for per-subject budgets.
+
     Returns:
         Combined text of all chunks + metadata
     """
+    if context_tokens is None:
+        context_tokens = DEFAULT_CONTEXT_TOKENS
     client = None
     try:
         client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
@@ -384,11 +411,11 @@ def fetch_topic_chunks_optimized(level, subject, chapter_name, unit_name, topic_
         chunk_texts = [chunk.get("text", "") for chunk in chunks]
         total_tokens = sum(estimate_tokens(t) for t in chunk_texts)
 
-        if total_tokens <= DEFAULT_CONTEXT_TOKENS:
+        if total_tokens <= context_tokens:
             selected_texts = chunk_texts
         else:
             avg_tokens = max(1, int(total_tokens / max(1, len(chunks))))
-            target_count = max(4, min(DEFAULT_MAX_CHUNKS, int(DEFAULT_CONTEXT_TOKENS / avg_tokens)))
+            target_count = max(4, min(DEFAULT_MAX_CHUNKS, int(context_tokens / avg_tokens)))
             target_count = min(len(chunks), target_count)
             step = max(1, int(len(chunks) / target_count))
 
@@ -399,13 +426,13 @@ def fetch_topic_chunks_optimized(level, subject, chapter_name, unit_name, topic_
 
             selected_texts = [chunk_texts[i] for i in indices]
 
-            while sum(estimate_tokens(t) for t in selected_texts) > DEFAULT_CONTEXT_TOKENS and len(selected_texts) > 4:
+            while sum(estimate_tokens(t) for t in selected_texts) > context_tokens and len(selected_texts) > 4:
                 selected_texts.pop()
 
         combined_text = "\n\n".join(selected_texts)
 
         print(f"✅ Fetched {len(chunks)} chunks for topic")
-        print(f"   Selected: {len(selected_texts)} chunks (budget ~{DEFAULT_CONTEXT_TOKENS} tokens)")
+        print(f"   Selected: {len(selected_texts)} chunks (budget ~{context_tokens} tokens)")
         print(f"   Input tokens (est.): {estimate_tokens(combined_text)}")
 
         return combined_text, metadata
@@ -470,6 +497,32 @@ def parse_mcq_response(response_text):
     return None
 
 _LABEL_RE = re.compile(r"^[A-D]\s*[\)\:\.\-]\s*", re.IGNORECASE)
+
+# Detects a full A/B/C/D option block accidentally embedded in the question text
+_EMBEDDED_OPTIONS_BLOCK_RE = re.compile(
+    r"\n\s*[Aa]\s*[\)\:\.\-][^\n]*\n\s*[Bb]\s*[\)\:\.\-][^\n]*\n\s*[Cc]\s*[\)\:\.\-]",
+    re.MULTILINE,
+)
+
+
+def strip_embedded_options(mcq: dict) -> dict:
+    """Strip A/B/C/D option block accidentally embedded inside the question text."""
+    q = mcq.get("question", "")
+    if not q:
+        return mcq
+    m = _EMBEDDED_OPTIONS_BLOCK_RE.search(q)
+    if m:
+        print(f"   🔧 Stripping embedded options from question text (pos {m.start()})")
+        mcq["question"] = q[: m.start()].rstrip()
+    return mcq
+
+
+def _normalize_option_body(text: str) -> str:
+    """Normalize option body for duplicate detection: strip label, ₹/Rs., commas."""
+    text = _LABEL_RE.sub("", str(text)).strip().lower()
+    text = re.sub(r"[₹\s,]", "", text)
+    text = re.sub(r"rs\.?", "", text)
+    return text
 
 # Extracts standalone Indian-format numbers: ₹1,23,456 / 1,23,456 / 1234.56
 _NUMBER_RE = re.compile(
@@ -711,6 +764,13 @@ def validate_mcq(mcq):
         if field not in mcq:
             return False, f"Missing field: {field}"
 
+    # Explanation must be non-empty and long enough to be real working
+    expl = str(mcq.get("explanation", "")).strip()
+    if not expl:
+        return False, "Empty explanation"
+    if len(expl) < 80:
+        return False, f"Explanation too short ({len(expl)} chars) — likely truncated"
+
     if not isinstance(mcq["options"], list) or len(mcq["options"]) != 4:
         return False, f"Expected 4 options, got {len(mcq.get('options', []))}"
 
@@ -718,8 +778,19 @@ def validate_mcq(mcq):
     if correct not in {"A", "B", "C", "D"}:
         return False, f"Invalid correct_answer: '{correct}'"
 
-    # Extract option bodies (strip label prefix) and check uniqueness
-    bodies = [_LABEL_RE.sub("", str(opt)).strip().lower() for opt in mcq["options"]]
+    # Check for multiple sub-questions (LLM asked to find X and Y together)
+    q_text = mcq.get("question", "")
+    if q_text.count("?") > 1:
+        return False, "Multiple question marks — question asks for more than one value"
+    multi_part = re.search(
+        r"\(\s*(?:i{1,3}|iv|v|[1-9])\s*\).*\(\s*(?:ii|iii|iv|v|[2-9])\s*\)",
+        q_text, re.DOTALL | re.IGNORECASE,
+    )
+    if multi_part:
+        return False, "Multiple sub-questions detected (e.g., '(i)...(ii)...')"
+
+    # Extract option bodies and check uniqueness (normalize ₹/Rs./commas first)
+    bodies = [_normalize_option_body(opt) for opt in mcq["options"]]
     if len(set(bodies)) < len(bodies):
         dupes = list({b for b in bodies if bodies.count(b) > 1})
         return False, f"Duplicate options: {dupes[:2]}"
@@ -870,6 +941,7 @@ def generate_mcq(level, subject, chapter_name, difficulty="very_hard", unit_name
             continue
 
         # Attempt to auto-correct answer-explanation mismatch before validation
+        parsed = strip_embedded_options(parsed)
         parsed = try_autocorrect_answer(parsed)
 
         is_valid, reason = validate_mcq(parsed)
@@ -977,7 +1049,8 @@ def generate_multiple_mcqs(level, subject, chapter_name, num_questions=1,
                 print(f"\n📚 Fetching comprehensive content for MCQ generation...")
                 context, metadata = fetch_topic_chunks_optimized(
                     level, subject, chapter_name, unit_name,
-                    selected_topic["name"]
+                    selected_topic["name"],
+                    context_tokens=_context_tokens_for_subject(normalize_subject_key(subject)),
                 )
 
                 if not context or metadata is None:
@@ -1116,7 +1189,8 @@ def generate_case_scenario_mcqs(level, subject, chapter_name,
     # ── 3. Fetch chunks ──────────────────────────────────────────────────────
     print(f"\n📚 Step 2: Fetching content — topic: {selected_topic['name']}")
     context, metadata = fetch_topic_chunks_optimized(
-        level, subject, chapter_name, unit_name, selected_topic["name"]
+        level, subject, chapter_name, unit_name, selected_topic["name"],
+        context_tokens=_context_tokens_for_subject(normalize_subject_key(subject)),
     )
     if not context or metadata is None:
         print("❌ Could not fetch topic content")
@@ -1174,6 +1248,7 @@ def generate_case_scenario_mcqs(level, subject, chapter_name,
     normalized_questions = []
     for i, q in enumerate(case_data["questions"]):
         q["question_number"] = i + 1
+        q = strip_embedded_options(q)
         q = try_autocorrect_answer(q)          # fix explanation vs letter mismatch
         q = normalize_options_order(q)
         for key, value in metadata.items():
