@@ -7,103 +7,149 @@ from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
 from langchain.schema import Document
 
-# --- Load Environment Variables ---
-load_dotenv(dotenv_path=".env.local")
+load_dotenv()
+load_dotenv(".env.local", override=True)
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MONGO_URI = os.getenv("MONGO_URI")
 
 if not OPENAI_API_KEY:
-    raise ValueError("❌ Missing OPENAI_API_KEY in .env.local")
+    raise ValueError("❌ Missing OPENAI_API_KEY")
 if not MONGO_URI:
-    raise ValueError("❌ Missing MONGO_URI in .env.local")
+    raise ValueError("❌ Missing MONGO_URI")
 
-# --- LangChain Clients ---
-embedder = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY, model="text-embedding-ada-002")
-llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0, model_name="gpt-4o-mini")
+# ── Config (all overridable via .env.local) ──────────────────────────────────
+QUERY_MODEL        = os.getenv("QUERY_MODEL",        "gpt-4.1-mini")
+QUERY_MAX_TOKENS   = int(os.getenv("QUERY_MAX_TOKENS",   "600"))
+QUERY_TEMPERATURE  = float(os.getenv("QUERY_TEMPERATURE", "0"))
+# Must match the model used at ingest time — switching models requires full re-ingest
+EMBEDDING_MODEL    = os.getenv("EMBEDDING_MODEL",    "text-embedding-ada-002")
+QUERY_TOP_K        = int(os.getenv("QUERY_TOP_K",    "4"))   # chunks to retrieve
 
-# --- Prompt ---
+# Pricing per 1K tokens (input, output)
+_MODEL_PRICING = {
+    "gpt-4.1":          (0.00200, 0.00800),
+    "gpt-4.1-mini":     (0.00040, 0.00160),
+    "gpt-4o":           (0.00250, 0.01000),
+    "gpt-4o-mini":      (0.00015, 0.00060),
+}
+# Embedding pricing per 1K tokens
+_EMBED_PRICING = {
+    "text-embedding-3-small": 0.00002,
+    "text-embedding-3-large": 0.00013,
+    "text-embedding-ada-002": 0.00010,
+}
+
+embedder = OpenAIEmbeddings(
+    openai_api_key=OPENAI_API_KEY,
+    model=EMBEDDING_MODEL,
+)
+llm = ChatOpenAI(
+    openai_api_key=OPENAI_API_KEY,
+    temperature=QUERY_TEMPERATURE,
+    model_name=QUERY_MODEL,
+    max_tokens=QUERY_MAX_TOKENS,
+)
+
 prompt_template = PromptTemplate(
     input_variables=["context", "question"],
-    template="""You are a CA Assistant helping students understand accounting and CA concepts.
-If the provided ICAI context contains the answer, use it and cite it.
-If the context does not contain the answer, answer from your own knowledge as a CA expert.
+    template="""You are a CA exam assistant. Use only the ICAI source content below.
+If the answer is in the content, cite the relevant concept. Be concise.
 
-Context:
+Content:
 {context}
 
-Question:
-{question}
+Question: {question}
 
 Answer:"""
 )
 
+
+def _estimate_query_cost(input_tokens: int, output_tokens: int, embed_tokens: int) -> float:
+    in_rate, out_rate = _MODEL_PRICING.get(QUERY_MODEL, (0, 0))
+    emb_rate = _EMBED_PRICING.get(EMBEDDING_MODEL, 0)
+    return (
+        (input_tokens / 1000) * in_rate
+        + (output_tokens / 1000) * out_rate
+        + (embed_tokens / 1000) * emb_rate
+    )
+
+
 def get_answer(level, subject, query):
-    print(f"🔍 Searching for '{query}' in Level: {level}, Subject: {subject}...")
+    print(f"🔍 Searching: '{query}'  [level={level}  subject={subject}]")
+    print(f"   Model: {QUERY_MODEL} | max_tokens: {QUERY_MAX_TOKENS} | embed: {EMBEDDING_MODEL}")
     mongo_client = None
 
     try:
-        mongo_client = pymongo.MongoClient(MONGO_URI)
-        db = mongo_client["icai-rag-db"]
+        mongo_client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        db = mongo_client.get_default_database()
         chunks_collection = db["icaichunks"]
 
         # 1. Embed the query
+        embed_tokens = max(1, len(query.split()) + 5)   # rough estimate
         question_embedding = embedder.embed_query(query)
 
-        # 2. Atlas Vector Search — uses vector_index with pre-filter on level + subject
+        # 2. Atlas Vector Search
         pipeline = [
             {
                 "$vectorSearch": {
                     "index": "vector_index",
                     "path": "embedding",
                     "queryVector": question_embedding,
-                    "numCandidates": 100,
-                    "limit": 5,
-                    "filter": {
-                        "level": level,
-                        "subject": subject
-                    }
+                    "numCandidates": 50,
+                    "limit": QUERY_TOP_K,
+                    "filter": {"level": level, "subject": subject},
                 }
             },
             {
                 "$project": {
-                    "text": 1,
-                    "topic_name": 1,
-                    "chapter_number": 1,
+                    "text": 1, "topic_name": 1,
+                    "chapter_number": 1, "chapter_name": 1,
                     "score": {"$meta": "vectorSearchScore"},
-                    "embedding": 0
+                    "embedding": 0,
                 }
-            }
+            },
         ]
 
         results = list(chunks_collection.aggregate(pipeline))
-        print(f"✅ Vector search returned {len(results)} results")
+        print(f"✅ Retrieved {len(results)} chunks")
 
         if not results:
-            print("⚠️ No relevant ICAI material found. Answering from general CA knowledge.")
-            try:
-                response = llm.invoke(query)
-                return response.content if hasattr(response, "content") else response
-            except Exception as e:
-                return f"❌ LLM error: {str(e)}"
+            print("⚠️ No ICAI material found — answering from general knowledge")
+            response = llm.invoke(query)
+            answer = response.content if hasattr(response, "content") else str(response)
+            return answer
 
-        docs = [Document(page_content=res["text"]) for res in results]
+        docs = [Document(page_content=r["text"]) for r in results]
 
-        # 3. Run QA Chain
+        # 3. QA chain
         chain = load_qa_chain(llm=llm, chain_type="stuff", prompt=prompt_template)
         result = chain.invoke({"input_documents": docs, "question": query})
-        return result["output_text"]
+        answer = result["output_text"]
+
+        # Cost estimate
+        context_chars = sum(len(r["text"]) for r in results)
+        input_tokens  = max(1, int((context_chars + len(query) + 200) / 4))
+        output_tokens = max(1, int(len(answer) / 4))
+        cost = _estimate_query_cost(input_tokens, output_tokens, embed_tokens)
+        print(f"💰 Est. cost: ${cost:.5f}  (in≈{input_tokens} out≈{output_tokens} tokens)")
+
+        return answer
 
     except Exception as e:
-        return f"❌ An error occurred: {str(e)}"
+        err = str(e)
+        if "insufficient_quota" in err or "exceeded your current quota" in err:
+            return "❌ OpenAI quota exhausted — add credits at platform.openai.com/account/billing"
+        return f"❌ Error: {err}"
 
     finally:
         if mongo_client:
             mongo_client.close()
 
-# --- CLI Execution ---
+
 if __name__ == "__main__":
     if len(sys.argv) < 4:
-        print("Usage: python query.py <Level> <Subject> \"<Your Question>\"")
+        print("Usage: python query.py <Level> <Subject> \"<Question>\"")
         sys.exit(1)
 
     level, subject, question = sys.argv[1], sys.argv[2], sys.argv[3]

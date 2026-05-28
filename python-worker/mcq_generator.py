@@ -7,6 +7,7 @@ Selects optimal chunks and uses advanced prompting
 import os
 import re
 import json
+import time
 import pymongo
 import random
 from dotenv import load_dotenv
@@ -19,7 +20,28 @@ from mcq_prompts import (
     normalize_subject_key,
 )
 
-MAX_GENERATION_RETRIES = 3
+MAX_GENERATION_RETRIES = 1   # 2 total attempts per topic; topic fallback handles the rest
+
+# ── OpenAI error handling ────────────────────────────────────────────────────
+_QUOTA_SIGNALS    = ("insufficient_quota", "exceeded your current quota", "billing_hard_limit_reached")
+_RATE_LIM_SIGNALS = ("rate_limit_exceeded", "rate limit", "too many requests")
+
+
+def _classify_llm_error(err_str: str) -> str:
+    """Classify a 429/API error so we know whether to retry.
+
+    Returns:
+        'quota'      — billing exhausted; retry is pointless
+        'rate_limit' — temporary throttle; retry after backoff
+        'other'      — unknown; retry once
+    """
+    lower = err_str.lower()
+    if any(s in lower for s in _QUOTA_SIGNALS):
+        return "quota"
+    if any(s in lower for s in _RATE_LIM_SIGNALS):
+        return "rate_limit"
+    return "other"
+
 
 load_dotenv()
 load_dotenv(".env.local", override=True)
@@ -44,9 +66,20 @@ _CONCEPTUAL_SUBJECTS = {
     "auditing_ethics", "corporate_laws", "strategic_management", "advanced_auditing",
 }
 
+# Subjects that consistently need MORE tokens than DEFAULT_MAX_TOKENS:
+# FM (leasing/NPV chains), AFM (derivatives), direct tax (treaty computations).
+_HEAVY_NUMERICAL_MAX_TOKENS = int(os.getenv("MCQ_HEAVY_MAX_OUTPUT_TOKENS", "2500"))
+_HEAVY_NUMERICAL_SUBJECTS = {
+    "financial_management", "advanced_financial_management", "direct_tax_international",
+}
+
 
 def _max_tokens_for_subject(subject_key: str) -> int:
-    return CONCEPTUAL_MAX_TOKENS if subject_key in _CONCEPTUAL_SUBJECTS else DEFAULT_MAX_TOKENS
+    if subject_key in _CONCEPTUAL_SUBJECTS:
+        return CONCEPTUAL_MAX_TOKENS
+    if subject_key in _HEAVY_NUMERICAL_SUBJECTS:
+        return _HEAVY_NUMERICAL_MAX_TOKENS
+    return DEFAULT_MAX_TOKENS
 
 
 def _context_tokens_for_subject(subject_key: str) -> int:
@@ -192,11 +225,28 @@ SUBJECT_CONFIG = {
 }
 
 def get_llm_for_subject(subject):
-    """Get subject-specific LLM configuration"""
+    """Get subject-specific LLM configuration.
+
+    Model selection (cheapest that maintains quality):
+      Conceptual subjects → gpt-4.1-mini  (5× cheaper, no arithmetic)
+      Numerical subjects  → gpt-4.1       (full accuracy for multi-step maths)
+
+    Override via env:
+      LLM_MODEL                  — forces ALL subjects to one model
+      LLM_MODEL_CONCEPTUAL       — overrides conceptual default only
+      LLM_MODEL_NUMERICAL        — overrides numerical default only
+    """
     subject_key = normalize_subject_key(subject)
     config = SUBJECT_CONFIG.get(subject_key, SUBJECT_CONFIG["business_economics"])
 
-    model = os.getenv("LLM_MODEL", config["model"])
+    is_conceptual = subject_key in _CONCEPTUAL_SUBJECTS
+    if is_conceptual:
+        default_model = "gpt-4.1-mini"
+        model = os.getenv("LLM_MODEL") or os.getenv("LLM_MODEL_CONCEPTUAL", default_model)
+    else:
+        default_model = "gpt-4.1"
+        model = os.getenv("LLM_MODEL") or os.getenv("LLM_MODEL_NUMERICAL", default_model)
+
     max_tokens = _max_tokens_for_subject(subject_key)
     llm = ChatOpenAI(
         openai_api_key=OPENAI_API_KEY,
@@ -304,36 +354,44 @@ def get_all_topics(level, subject, chapter_name, unit_name=None):
         if client:
             client.close()
 
+_TOPIC_SWEET_SPOT_MAX = int(os.getenv("MCQ_TOPIC_MAX_CHUNKS", "20"))
+
+
 def select_best_topic_for_mcq(topics_list, exclude_topics=None, prefer_complex=True):
     """
-    Select the BEST topic for MCQ generation.
-    For very-hard MCQs, prefers topics with more chunks (more content to work with).
-    
-    Args:
-        topics_list: List of available topics
-        exclude_topics: List of topic names to exclude
-        prefer_complex: If True, select topics with most chunks
-    
-    Returns:
-        Selected topic or None
+    Select the best topic for MCQ generation.
+
+    Cost-aware strategy:
+    • Prefer "focused" topics with 3–20 chunks — they contain specific, well-scoped
+      content that the LLM can build a coherent question around without looping.
+    • Deprioritize huge topics (>20 chunks) — broad topics produce too many facts,
+      causing the LLM to enter exploration loops and burn tokens on retries.
+    • Fall back to large topics only when all focused ones are exhausted.
     """
     if exclude_topics is None:
         exclude_topics = []
-    
-    # Filter out already used topics
-    available_topics = [t for t in topics_list if t["name"] not in exclude_topics]
-    
-    if not available_topics:
+
+    available = [t for t in topics_list if t["name"] not in exclude_topics]
+
+    if not available:
         print("⚠️ All topics exhausted, cycling back to beginning")
         return topics_list[0] if topics_list else None
-    
-    # Select topic with most chunks (importance-based, best for complex MCQs)
-    best_topic = available_topics[0]
-    
+
+    # Sort: focused topics first (3–20 chunks), then large topics by chunk count
+    def _score(t):
+        c = t["chunk_count"]
+        if 3 <= c <= _TOPIC_SWEET_SPOT_MAX:
+            return (1, c)   # tier 1 — preferred, higher count wins within tier
+        else:
+            return (0, c)   # tier 0 — fallback (too small or too large)
+
+    available.sort(key=_score, reverse=True)
+    best_topic = available[0]
+
+    tier = "focused" if 3 <= best_topic["chunk_count"] <= _TOPIC_SWEET_SPOT_MAX else "large/fallback"
     print(f"\n🎯 BEST TOPIC SELECTED: {best_topic['name']}")
-    print(f"   Importance Score: {best_topic['chunk_count']} chunks")
-    print(f"   Total Content: {best_topic['total_chunks']} chunks in topic")
-    
+    print(f"   Chunks: {best_topic['chunk_count']} ({tier})")
+
     return best_topic
 
 def fetch_topic_chunks_optimized(level, subject, chapter_name, unit_name, topic_name,
@@ -865,12 +923,12 @@ def generate_mcq(level, subject, chapter_name, difficulty="very_hard", unit_name
     if difficulty.lower() not in valid_difficulties:
         difficulty = "very_hard"
     
-    # Get subject-specific LLM
+    # ── Model setup ───────────────────────────────────────────────────────────
     llm, config = get_llm_for_subject(subject)
     print(f"\n🤖 LLM Configuration:")
-    print(f"   Temperature: {config['temperature']} (lower = more focused for hard Qs)")
-    print(f"   Model: {config['model']}")
-    print(f"   Max tokens: {config['max_tokens']}")
+    print(f"   Model      : {config['model']}")
+    print(f"   Max tokens : {config['max_tokens']}")
+    print(f"   Temperature: {config['temperature']}")
     
     # Get context and metadata
     if topic_data is None:
@@ -918,14 +976,34 @@ def generate_mcq(level, subject, chapter_name, difficulty="very_hard", unit_name
             response_text = response.content if hasattr(response, "content") else str(response)
 
             usage = extract_token_usage(response)
-            if usage and attempt == 0:
-                model_name = config.get("model", "unknown")
-                print(f"📊 Token usage: input={usage.get('input')}, output={usage.get('output')}, total={usage.get('total')}")
+            model_name = config.get("model", "unknown")
+            if usage:
+                out_tok = usage.get("output") or 0
+                print(f"📊 Token usage: input={usage.get('input')}, output={out_tok}, total={usage.get('total')}")
                 cost = estimate_cost(model_name, usage)
                 if cost is not None:
                     print(f"💰 Approx cost ({model_name}): ${cost:.4f}")
+                # If output hit the hard cap, the JSON was cut off mid-stream.
+                # Skip parsing entirely and retry — no point running the exploration
+                # loop check on a truncated response (false positives happen here).
+                if out_tok >= config.get("max_tokens", DEFAULT_MAX_TOKENS):
+                    print(f"   ⚠️  Output truncated at {out_tok} tokens — retrying with fresh generation")
+                    if attempt >= MAX_GENERATION_RETRIES:
+                        print(f"❌ Response keeps truncating — consider increasing MCQ_HEAVY_MAX_OUTPUT_TOKENS")
+                        return None
+                    continue
         except Exception as e:
-            print(f"❌ LLM Error: {e}")
+            err_type = _classify_llm_error(str(e))
+            if err_type == "quota":
+                print(f"❌ OpenAI quota exhausted — add credits at platform.openai.com/account/billing")
+                print(f"   (Retrying will NOT help — aborting immediately)")
+                return None
+            if err_type == "rate_limit":
+                wait = 15 * (attempt + 1)   # 15 s, 30 s, 45 s
+                print(f"⏳ Rate limited — waiting {wait}s before retry {attempt + 1}/{MAX_GENERATION_RETRIES}...")
+                time.sleep(wait)
+            else:
+                print(f"❌ LLM Error: {e}")
             if attempt >= MAX_GENERATION_RETRIES:
                 return None
             continue
@@ -1097,9 +1175,14 @@ def generate_multiple_mcqs(level, subject, chapter_name, num_questions=1,
 # ===== CASE SCENARIO GENERATION =====
 
 def get_llm_for_case_scenario(subject):
-    """LLM for case scenario — same model/temperature but higher token cap."""
-    config = SUBJECT_CONFIG.get(normalize_subject_key(subject), SUBJECT_CONFIG["business_economics"])
-    model = os.getenv("LLM_MODEL", config["model"])
+    """LLM for case scenario — uses same per-category model as MCQ, but higher token cap."""
+    subject_key = normalize_subject_key(subject)
+    config = SUBJECT_CONFIG.get(subject_key, SUBJECT_CONFIG["business_economics"])
+    is_conceptual = subject_key in _CONCEPTUAL_SUBJECTS
+    if is_conceptual:
+        model = os.getenv("LLM_MODEL") or os.getenv("LLM_MODEL_CONCEPTUAL", "gpt-4.1-mini")
+    else:
+        model = os.getenv("LLM_MODEL") or os.getenv("LLM_MODEL_NUMERICAL", "gpt-4.1")
     llm = ChatOpenAI(
         openai_api_key=OPENAI_API_KEY,
         model_name=model,
@@ -1226,7 +1309,13 @@ def generate_case_scenario_mcqs(level, subject, chapter_name,
         if usage:
             print(f"📊 Token usage: input={usage.get('input')}, output={usage.get('output')}, total={usage.get('total')}")
     except Exception as e:
-        print(f"❌ LLM Error: {e}")
+        err_type = _classify_llm_error(str(e))
+        if err_type == "quota":
+            print(f"❌ OpenAI quota exhausted — add credits at platform.openai.com/account/billing")
+        elif err_type == "rate_limit":
+            print(f"⏳ Rate limited — case scenario generation aborted (no retry for single-call)")
+        else:
+            print(f"❌ LLM Error: {e}")
         return None
 
     # ── 6. Parse & validate ───────────────────────────────────────────────────
