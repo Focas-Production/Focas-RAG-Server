@@ -700,43 +700,47 @@ def detect_closest_option_bug(mcq: dict) -> tuple:
     if not correct_opt_text:
         return False, "no matching option — skip"
 
-    # Reliable extraction of the final computed answer (✅ line → "= ₹X" → last
-    # number), rather than just "last number by position".
-    main_expl_val = _final_answer_value(explanation)
-    opt_nums = _extract_numbers(correct_opt_text)
-
-    if main_expl_val is None or not opt_nums:
+    correct_opt_nums = _extract_numbers(correct_opt_text)
+    if not correct_opt_nums:
         return False, "no numbers to compare"
 
-    # STRICT GUARANTEE: the computed answer must appear verbatim in SOME option.
-    # If it is absent from all four, the MCQ has no correct answer — reject so a
-    # corrective retry fires. (Multi-step intermediate values are excluded
-    # because _final_answer_value targets the FINAL figure, not calc steps.)
-    if not _value_in_options(main_expl_val, options):
-        # Diagnostic: show what we extracted vs the actual option values + the
-        # explanation tail, so we can tell a real defect from an extraction miss.
-        opt_vals = [_extract_numbers(str(o)) for o in options]
-        tail = re.sub(r"\s+", " ", explanation[-160:]).strip()
-        print(f"      ↳ extracted answer = {main_expl_val:,.2f}")
-        print(f"      ↳ option values    = {opt_vals}")
-        print(f"      ↳ explanation tail = …{tail}")
-        return (
-            True,
-            f"explanation computed {main_expl_val:,.2f} but this value is absent "
-            f"from all 4 options — the answer is not selectable (no correct option)"
-        )
+    # ANCHOR on the marked option's value, NOT a fragile "final number" guess.
+    # The real defect we want to catch is: the model marked an option it never
+    # actually computed (the classic 'pick the closest option' bug). So:
+    #   1. If the marked option's value appears anywhere in the explanation
+    #      working, the model DID arrive at the answer it selected → valid.
+    #      (A long calc legitimately also contains intermediates like tax-before-
+    #      surcharge; those must NOT cause a rejection.)
+    expl_nums = _extract_numbers(explanation)
+    marked_value_is_computed = any(
+        _value_in_options(cv, [explanation]) for cv in correct_opt_nums
+    ) or any(
+        abs(cv - e) / max(abs(cv), 1) * 100 < 0.5
+        for cv in correct_opt_nums for e in expl_nums
+    )
+    if marked_value_is_computed:
+        return False, "ok"
 
-    # The answer IS in some option. It must be in the option marked correct;
-    # if it sits in a different option, that's a label bug → _numerical_autocorrect
-    # fixes it upstream, so only flag here if it somehow remains misaligned.
-    if not _value_in_options(main_expl_val, [correct_opt_text]):
-        return (
-            True,
-            f"explanation computed {main_expl_val:,.2f} which is in a DIFFERENT "
-            f"option, not the one marked correct ({correct_letter})"
-        )
+    # 2. The marked answer is NOT supported by the working. If the explanation's
+    #    final figure maps to a DIFFERENT option, that's a label slip handled by
+    #    the autocorrect/letter cross-check — not a 'no answer' situation.
+    final_val = _final_answer_value(explanation)
+    if final_val is None or _value_in_options(final_val, options):
+        return False, "ok"
 
-    return False, "ok"
+    # 3. The marked answer was never computed AND the explanation's final figure
+    #    matches no option → there is genuinely no selectable answer. Flag it.
+    opt_vals = [_extract_numbers(str(o)) for o in options]
+    tail = re.sub(r"\s+", " ", explanation[-160:]).strip()
+    print(f"      ↳ computed final   = {final_val:,.2f}")
+    print(f"      ↳ marked option    = {correct_letter} {correct_opt_nums}")
+    print(f"      ↳ option values    = {opt_vals}")
+    print(f"      ↳ explanation tail = …{tail}")
+    return (
+        True,
+        f"explanation's final value {final_val:,.2f} matches no option and the "
+        f"marked answer ({correct_letter}) is never computed — no selectable answer"
+    )
 
 _EQ_VAL_RE = re.compile(
     r"=\s*(?:Rs\.?\s*|₹\s*)?(\d{1,3}(?:,\d{2,3})*(?:\.\d+)?|\d+(?:\.\d+)?)",
