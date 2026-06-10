@@ -540,40 +540,81 @@ _EXPLORATION_SIGNALS = (
 )
 
 
+def _extract_first_json_object(text: str):
+    """Return the first balanced {...} object substring, or None. Brace-counting
+    that respects string literals/escapes, so it grabs ONE complete JSON object
+    even when the model appends reasoning prose after it."""
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
 def parse_mcq_response(response_text):
     """Parse MCQ JSON response from LLM with robust error handling.
 
-    Fast-fails (returns None) if the response contains exploration-loop signals
-    — phrases like 'Alternatively, perhaps' or 'not matching' indicate the LLM
-    got confused about its own options and is burning tokens trying alternatives.
-    Returning None here triggers a retry with a fresh prompt.
+    JSON is extracted FIRST. The exploration-loop signal check is only a
+    last-resort diagnostic when no valid JSON can be parsed — phrases like
+    'does not match' / 'not matching' appear legitimately inside a valid MCQ's
+    explanation (distractor analysis), so they must NOT discard a parseable
+    response. Returning None triggers a corrective retry.
     """
+    text = response_text.strip()
+
+    # Strip markdown code fences if present
+    if "```json" in text:
+        text = text.split("```json")[1].split("```")[0].strip()
+    elif "```" in text:
+        text = text.split("```")[1].split("```")[0].strip()
+
+    # 1. Whole text is JSON.
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 2. First complete balanced {...} object (ignores trailing prose).
+    obj = _extract_first_json_object(text)
+    if obj:
+        try:
+            return json.loads(obj)
+        except json.JSONDecodeError:
+            pass
+
+    # 3. Greedy first "{" … last "}".
+    start, end = text.find("{"), text.rfind("}") + 1
+    if start != -1 and end > start:
+        try:
+            return json.loads(text[start:end])
+        except json.JSONDecodeError:
+            pass
+
+    # 4. No parseable JSON. If the model rambled in an exploration loop, say so.
     lower = response_text.lower()
     for signal in _EXPLORATION_SIGNALS:
         if signal in lower:
-            print(f"   ❌ LLM entered exploration loop ('{signal}') — discarding response")
+            print(f"   ❌ LLM entered exploration loop ('{signal}') and produced no valid JSON — discarding")
             return None
-
-    response_text = response_text.strip()
-
-    # Try to extract JSON from markdown code blocks
-    if "```json" in response_text:
-        response_text = response_text.split("```json")[1].split("```")[0].strip()
-    elif "```" in response_text:
-        response_text = response_text.split("```")[1].split("```")[0].strip()
-
-    try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        # Try to find JSON object
-        start = response_text.find("{")
-        end = response_text.rfind("}") + 1
-
-        if start != -1 and end > start:
-            try:
-                return json.loads(response_text[start:end])
-            except:
-                return None
 
     return None
 
@@ -1341,23 +1382,31 @@ def get_llm_for_case_scenario(subject):
 
 def parse_case_scenario_response(response_text):
     """Parse the LLM's case scenario JSON (narrative + questions list)."""
-    response_text = response_text.strip()
+    text = response_text.strip()
 
-    if "```json" in response_text:
-        response_text = response_text.split("```json")[1].split("```")[0].strip()
-    elif "```" in response_text:
-        response_text = response_text.split("```")[1].split("```")[0].strip()
+    if "```json" in text:
+        text = text.split("```json")[1].split("```")[0].strip()
+    elif "```" in text:
+        text = text.split("```")[1].split("```")[0].strip()
 
     try:
-        return json.loads(response_text)
+        return json.loads(text)
     except json.JSONDecodeError:
-        start = response_text.find("{")
-        end = response_text.rfind("}") + 1
-        if start != -1 and end > start:
-            try:
-                return json.loads(response_text[start:end])
-            except Exception:
-                return None
+        pass
+
+    obj = _extract_first_json_object(text)
+    if obj:
+        try:
+            return json.loads(obj)
+        except json.JSONDecodeError:
+            pass
+
+    start, end = text.find("{"), text.rfind("}") + 1
+    if start != -1 and end > start:
+        try:
+            return json.loads(text[start:end])
+        except json.JSONDecodeError:
+            pass
     return None
 
 
