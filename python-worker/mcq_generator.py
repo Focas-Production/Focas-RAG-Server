@@ -713,6 +713,13 @@ def detect_closest_option_bug(mcq: dict) -> tuple:
     # corrective retry fires. (Multi-step intermediate values are excluded
     # because _final_answer_value targets the FINAL figure, not calc steps.)
     if not _value_in_options(main_expl_val, options):
+        # Diagnostic: show what we extracted vs the actual option values + the
+        # explanation tail, so we can tell a real defect from an extraction miss.
+        opt_vals = [_extract_numbers(str(o)) for o in options]
+        tail = re.sub(r"\s+", " ", explanation[-160:]).strip()
+        print(f"      ↳ extracted answer = {main_expl_val:,.2f}")
+        print(f"      ↳ option values    = {opt_vals}")
+        print(f"      ↳ explanation tail = …{tail}")
         return (
             True,
             f"explanation computed {main_expl_val:,.2f} but this value is absent "
