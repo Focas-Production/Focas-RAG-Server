@@ -20,7 +20,14 @@ from mcq_prompts import (
     normalize_subject_key,
 )
 
-MAX_GENERATION_RETRIES = 1   # 2 total attempts per topic; topic fallback handles the rest
+# Retries now feed the validation failure back to the model (see
+# build_retry_correction), so each retry is corrective rather than a blind
+# regenerate. Default 2 → 3 total attempts; topic fallback handles the rest.
+MAX_GENERATION_RETRIES = int(os.getenv("MCQ_GENERATION_RETRIES", "2"))
+# Case scenarios are a single multi-question call with no topic fallback, so they
+# previously had NO retry at all — one bad JSON/validation and the whole scenario
+# was lost. Corrective retries apply here too. Default 2 → 3 total attempts.
+CASE_SCENARIO_MAX_RETRIES = int(os.getenv("MCQ_CASE_SCENARIO_RETRIES", "2"))
 
 # ── OpenAI error handling ────────────────────────────────────────────────────
 _QUOTA_SIGNALS    = ("insufficient_quota", "exceeded your current quota", "billing_hard_limit_reached")
@@ -72,6 +79,9 @@ _HEAVY_NUMERICAL_MAX_TOKENS = int(os.getenv("MCQ_HEAVY_MAX_OUTPUT_TOKENS", "2500
 _HEAVY_NUMERICAL_SUBJECTS = {
     "financial_management", "advanced_financial_management", "direct_tax_international",
 }
+# Ceiling for self-healing token bumps when a response truncates mid-JSON. Keeps
+# runaway cost bounded while letting a long tax/derivative MCQ finish.
+_MAX_OUTPUT_TOKENS_CEILING = int(os.getenv("MCQ_MAX_OUTPUT_TOKENS_CEILING", "4000"))
 
 
 def _max_tokens_for_subject(subject_key: str) -> int:
@@ -257,6 +267,19 @@ def get_llm_for_subject(subject):
     )
     config = {**config, "model": model, "max_tokens": max_tokens}
     return llm, config
+
+def _rebind_max_tokens(llm, new_max_tokens):
+    """Return an LLM that emits up to ``new_max_tokens``. Used to self-heal a
+    truncated response on retry. Tries to mutate the existing client; falls back
+    to .bind() (portable across langchain versions) if the field is frozen."""
+    try:
+        llm.max_tokens = new_max_tokens
+        return llm
+    except Exception:
+        try:
+            return llm.bind(max_tokens=new_max_tokens)
+        except Exception:
+            return llm
 
 def extract_token_usage(response):
     """Extract token usage from LangChain response if available."""
@@ -636,57 +659,100 @@ def detect_closest_option_bug(mcq: dict) -> tuple:
     if not correct_opt_text:
         return False, "no matching option — skip"
 
-    # Use only the part of the explanation BEFORE the anchor
-    anchor_idx = explanation.find("✅")
-    work_text = explanation[:anchor_idx] if anchor_idx != -1 else explanation
-    # Last 200 chars — closer to the actual computed answer
-    work_snippet = work_text[-200:] if len(work_text) > 200 else work_text
-
-    # Collect numbers in order of appearance (not sorted by value)
-    expl_ordered = []
-    for m in _NUMBER_RE.finditer(work_snippet):
-        v = _normalise_number(m.group(0))
-        if not (v != v) and v > 0:  # skip NaN and zero
-            expl_ordered.append(v)
-
+    # Reliable extraction of the final computed answer (✅ line → "= ₹X" → last
+    # number), rather than just "last number by position".
+    main_expl_val = _final_answer_value(explanation)
     opt_nums = _extract_numbers(correct_opt_text)
 
-    if not expl_ordered or not opt_nums:
+    if main_expl_val is None or not opt_nums:
         return False, "no numbers to compare"
 
-    # Last number by position is the most likely final computed answer
-    main_expl_val = expl_ordered[-1]
-    main_opt_val  = max(opt_nums)
+    # STRICT GUARANTEE: the computed answer must appear verbatim in SOME option.
+    # If it is absent from all four, the MCQ has no correct answer — reject so a
+    # corrective retry fires. (Multi-step intermediate values are excluded
+    # because _final_answer_value targets the FINAL figure, not calc steps.)
+    if not _value_in_options(main_expl_val, options):
+        return (
+            True,
+            f"explanation computed {main_expl_val:,.2f} but this value is absent "
+            f"from all 4 options — the answer is not selectable (no correct option)"
+        )
 
-    if main_opt_val == 0:
-        return False, "zero value — skip"
+    # The answer IS in some option. It must be in the option marked correct;
+    # if it sits in a different option, that's a label bug → _numerical_autocorrect
+    # fixes it upstream, so only flag here if it somehow remains misaligned.
+    if not _value_in_options(main_expl_val, [correct_opt_text]):
+        return (
+            True,
+            f"explanation computed {main_expl_val:,.2f} which is in a DIFFERENT "
+            f"option, not the one marked correct ({correct_letter})"
+        )
 
-    diff_pct = abs(main_expl_val - main_opt_val) / max(abs(main_opt_val), 1) * 100
-    if diff_pct <= 0.5 or abs(main_expl_val - main_opt_val) <= 1:
-        return False, "ok"
-
-    # Only flag if the explanation's final value is absent from ALL options —
-    # multi-step problems legitimately have intermediate values that don't
-    # appear in any option (they're just calculation steps, not the answer).
-    all_opt_text = " ".join(str(o) for o in options)
-    all_opt_nums = _extract_numbers(all_opt_text)
-    if any(
-        abs(main_expl_val - n) / max(abs(n), 1) * 100 < 0.5
-        for n in all_opt_nums
-    ):
-        return False, "explanation value found in options — ok"
-
-    return (
-        True,
-        f"explanation computed {main_expl_val:,.2f} but this value is absent "
-        f"from all 4 options; correct option ({correct_letter}) contains "
-        f"{main_opt_val:,.2f} — possible 'closest option' bug"
-    )
+    return False, "ok"
 
 _EQ_VAL_RE = re.compile(
     r"=\s*(?:Rs\.?\s*|₹\s*)?(\d{1,3}(?:,\d{2,3})*(?:\.\d+)?|\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
+
+
+def _final_answer_value(explanation: str):
+    """Best-effort extraction of the FINAL computed answer value the explanation
+    settles on. Tried in priority order (most reliable first):
+
+      1. A number on the '✅ ...' conclusion line — the model's own declared
+         final answer (e.g. "✅ Correct Answer: Option B (₹6,00,000)").
+      2. The last "= ₹X" equation result in the calculation body, taken BEFORE
+         the "Option A is…" discussion (which quotes distractor values).
+      3. The last positional number in the final stretch of the calc text.
+
+    Returns a float, or None when no usable number is found.
+    """
+    if not explanation:
+        return None
+
+    # 1. Number on the ✅ conclusion line.
+    anchor_idx = explanation.find("✅")
+    if anchor_idx != -1:
+        tail = explanation[anchor_idx:anchor_idx + 200]
+        nums = _extract_numbers(tail)
+        # Prefer the largest non-letter number on the line (skips "Option 2" style)
+        nums = [n for n in nums if n >= 1]
+        if nums:
+            return max(nums)
+
+    work_text = explanation[:anchor_idx] if anchor_idx != -1 else explanation
+    # Strip the "Option A is…" discussion — it quotes distractor values.
+    opt_discuss = re.search(
+        r"\bOption\s+[A-D]\s+(?:is|shows|gives|represents|would|will)\b",
+        work_text, re.IGNORECASE,
+    )
+    if opt_discuss:
+        work_text = work_text[:opt_discuss.start()]
+
+    # 2. Last "= ₹X" equation result.
+    eq_matches = list(_EQ_VAL_RE.finditer(work_text))
+    if eq_matches:
+        v = _normalise_number(eq_matches[-1].group(1))
+        if v == v and v != 0:  # not NaN, not zero
+            return v
+
+    # 3. Last positional number in the final stretch.
+    snippet = work_text[-200:]
+    ordered = [
+        _normalise_number(m.group(0))
+        for m in _NUMBER_RE.finditer(snippet)
+    ]
+    ordered = [v for v in ordered if v == v and v > 0]
+    return ordered[-1] if ordered else None
+
+
+def _value_in_options(value, options, tol_pct=0.5):
+    """True if ``value`` matches any number in ``options`` within tol_pct."""
+    for n in _extract_numbers(" ".join(str(o) for o in options)):
+        if abs(value - n) / max(abs(n), 1) * 100 < tol_pct:
+            return True
+    return False
 
 
 def _numerical_autocorrect(mcq: dict):
@@ -709,26 +775,10 @@ def _numerical_autocorrect(mcq: dict):
     if not explanation or correct_letter not in {"A", "B", "C", "D"}:
         return None
 
-    # Cut off at ✅ anchor
-    anchor_idx = explanation.find("✅")
-    work_text = explanation[:anchor_idx] if anchor_idx != -1 else explanation
-
-    # Strip the option-discussion section ("Option A is…", "Option B is…")
-    opt_discuss = re.search(
-        r"\bOption\s+[A-D]\s+(?:is|shows|gives|represents|would|will)\b",
-        work_text,
-        re.IGNORECASE,
-    )
-    if opt_discuss:
-        work_text = work_text[: opt_discuss.start()]
-
-    # Find the last "= ₹X" or "= X" in the pure calculation text
-    eq_matches = list(_EQ_VAL_RE.finditer(work_text))
-    if not eq_matches:
-        return None
-
-    last_computed = _normalise_number(eq_matches[-1].group(1))
-    if last_computed != last_computed or last_computed == 0:  # NaN / zero
+    # Same final-answer extraction used by detect_closest_option_bug, so the
+    # autocorrect and the validator never disagree on what the answer is.
+    last_computed = _final_answer_value(explanation)
+    if last_computed is None:
         return None
 
     # If the correct option already contains this value, no fix needed
@@ -810,6 +860,46 @@ def try_autocorrect_answer(mcq: dict) -> dict:
     return mcq
 
 
+def check_single_question(q_text):
+    """Return (ok, reason) — reject questions that ask for MORE THAN ONE value.
+
+    Shared by validate_mcq and validate_case_scenario so both gates behave the
+    same. Distinguishes genuine multi-answer questions from incidental
+    enumerations of INPUTS and statutory sub-section references.
+    """
+    q_text = q_text or ""
+    if q_text.count("?") > 1:
+        return False, "Multiple question marks — question asks for more than one value"
+    # Find an enumeration like "(i)...(ii)" or "(1)...(2)". The opening paren must
+    # sit at a word boundary so statutory references such as "Section 68(1)" are
+    # NOT matched. Roman numerals are anchored to a-z to avoid matching "(v)" in
+    # the middle of a word, etc.
+    multi_part = re.search(
+        r"(?<![\w)])\(\s*(?:i{1,3}|iv|v|[1-9])\s*\).*?(?<![\w)])\(\s*(?:ii|iii|iv|v|[2-9])\s*\)",
+        q_text, re.DOTALL | re.IGNORECASE,
+    )
+    if multi_part:
+        # An enumeration alone is not a multi-part question — tax/accounting MCQs
+        # routinely list INPUTS, e.g. "...considering (i) cash credit ₹5,00,000
+        # and (ii) unexplained investment ₹2,00,000?". Only reject when an
+        # asking-verb directly introduces the enumeration (the model is asking the
+        # student to compute several separate values).
+        intro = q_text[:multi_part.start()].lower()
+        asks_multiple = re.search(
+            r"\b(compute|calculate|find|determine|ascertain|state|what\s+are|"
+            r"how\s+much\s+are)\b[^.?]{0,40}$",
+            intro,
+        )
+        introduces_inputs = re.search(
+            r"\b(consider(?:ing)?|given|including|such\s+as|namely|where|"
+            r"from\s+the\s+following|section|clause|rule|sub-?section|para)\b[^.?]{0,40}$",
+            intro,
+        )
+        if asks_multiple and not introduces_inputs:
+            return False, "Multiple sub-questions detected (e.g., '(i)...(ii)...')"
+    return True, "valid"
+
+
 def validate_mcq(mcq):
     """
     Validate MCQ structure and quality.
@@ -837,15 +927,9 @@ def validate_mcq(mcq):
         return False, f"Invalid correct_answer: '{correct}'"
 
     # Check for multiple sub-questions (LLM asked to find X and Y together)
-    q_text = mcq.get("question", "")
-    if q_text.count("?") > 1:
-        return False, "Multiple question marks — question asks for more than one value"
-    multi_part = re.search(
-        r"\(\s*(?:i{1,3}|iv|v|[1-9])\s*\).*\(\s*(?:ii|iii|iv|v|[2-9])\s*\)",
-        q_text, re.DOTALL | re.IGNORECASE,
-    )
-    if multi_part:
-        return False, "Multiple sub-questions detected (e.g., '(i)...(ii)...')"
+    ok, reason = check_single_question(mcq.get("question", ""))
+    if not ok:
+        return False, reason
 
     # Extract option bodies and check uniqueness (normalize ₹/Rs./commas first)
     bodies = [_normalize_option_body(opt) for opt in mcq["options"]]
@@ -873,6 +957,49 @@ def validate_mcq(mcq):
         return False, f"Closest-option bug: {detail}"
 
     return True, "valid"
+
+def build_retry_correction(reason):
+    """Turn a validation failure into an explicit corrective instruction that is
+    appended to the prompt on retry, so the model fixes the specific problem
+    instead of regenerating the same flawed MCQ. Returns "" when there is no
+    reason (e.g. parse/truncation failure handled elsewhere)."""
+    if not reason:
+        return ""
+    low = reason.lower()
+    if "sub-question" in low or "more than one value" in low or "question marks" in low:
+        hint = ("Your previous attempt asked for MORE THAN ONE value (it used sub-parts "
+                "like '(i)...(ii)...' or multiple '?'). Ask for EXACTLY ONE value with a "
+                "single question mark. List any given figures as a sentence, not as "
+                "labelled sub-questions to compute.")
+    elif "duplicate options" in low:
+        hint = ("Your previous attempt had duplicate options. Make all 4 options clearly "
+                "distinct values.")
+    elif ("explanation states" in low or "closest-option" in low or "closest option" in low
+          or "absent from all" in low or "not selectable" in low or "different option" in low
+          or "no correct option" in low):
+        hint = ("Your previous attempt's COMPUTED ANSWER did not appear among the 4 options "
+                "(or sat in the wrong option). Write the EXACT value you compute in the "
+                "explanation verbatim into one option slot, set correct_answer to that "
+                "option's letter, and make the other 3 options plausible WRONG values. The "
+                "correct answer MUST be one of the four options.")
+    elif "explanation too short" in low or "empty explanation" in low:
+        hint = ("Your previous attempt's explanation was missing or too short. Provide a "
+                "complete step-by-step working (at least 80 characters).")
+    elif "options" in low and "got" in low:
+        hint = "Your previous attempt did not have exactly 4 options. Provide exactly 4."
+    elif "invalid correct_answer" in low:
+        hint = "Set correct_answer to a single letter: A, B, C, or D."
+    elif "missing field" in low:
+        hint = f"Your previous attempt was missing a required field ({reason}). Include all fields."
+    else:
+        hint = f"Your previous attempt was rejected: {reason}. Fix this and regenerate."
+    return (
+        "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "⚠️ CORRECTION REQUIRED — your previous attempt was REJECTED\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{hint}\n"
+        "Return a corrected MCQ as valid JSON.\n"
+    )
 
 def get_subject_context(subject):
     """Get subject-specific context.
@@ -967,9 +1094,14 @@ def generate_mcq(level, subject, chapter_name, difficulty="very_hard", unit_name
     # Call LLM with retry on validation failure
     print(f"\n⏳ Generating {difficulty.upper()} MCQ (this may take 30-60 seconds)...")
     mcq = None
+    base_prompt = prompt
+    last_failure = None
     for attempt in range(MAX_GENERATION_RETRIES + 1):
         if attempt > 0:
-            print(f"🔄 Retry {attempt}/{MAX_GENERATION_RETRIES} — regenerating...")
+            print(f"🔄 Retry {attempt}/{MAX_GENERATION_RETRIES} — regenerating with correction...")
+            # Feed the specific failure back so the model fixes it instead of
+            # blindly repeating the same mistake (a no-op retry burns tokens).
+            prompt = base_prompt + build_retry_correction(last_failure)
 
         try:
             response = llm.invoke(prompt)
@@ -986,10 +1118,22 @@ def generate_mcq(level, subject, chapter_name, difficulty="very_hard", unit_name
                 # If output hit the hard cap, the JSON was cut off mid-stream.
                 # Skip parsing entirely and retry — no point running the exploration
                 # loop check on a truncated response (false positives happen here).
-                if out_tok >= config.get("max_tokens", DEFAULT_MAX_TOKENS):
-                    print(f"   ⚠️  Output truncated at {out_tok} tokens — retrying with fresh generation")
-                    if attempt >= MAX_GENERATION_RETRIES:
-                        print(f"❌ Response keeps truncating — consider increasing MCQ_HEAVY_MAX_OUTPUT_TOKENS")
+                cur_cap = config.get("max_tokens", DEFAULT_MAX_TOKENS)
+                if out_tok >= cur_cap:
+                    # Self-heal: bump the budget so the retry can actually FINISH,
+                    # rather than re-sending the same doomed request at the same cap.
+                    new_cap = min(int(cur_cap * 1.6), _MAX_OUTPUT_TOKENS_CEILING)
+                    if new_cap > cur_cap:
+                        config["max_tokens"] = new_cap
+                        llm = _rebind_max_tokens(llm, new_cap)
+                        print(f"   ⚠️  Output truncated at {out_tok} tokens — raising cap "
+                              f"{cur_cap} → {new_cap} and regenerating")
+                    else:
+                        print(f"   ⚠️  Output truncated at {out_tok} tokens (already at ceiling "
+                              f"{_MAX_OUTPUT_TOKENS_CEILING})")
+                    if attempt >= MAX_GENERATION_RETRIES or new_cap <= cur_cap:
+                        print(f"❌ Response keeps truncating even at {cur_cap} tokens — raise "
+                              f"MCQ_MAX_OUTPUT_TOKENS / MCQ_MAX_OUTPUT_TOKENS_CEILING")
                         return None
                     continue
         except Exception as e:
@@ -1028,6 +1172,7 @@ def generate_mcq(level, subject, chapter_name, difficulty="very_hard", unit_name
             break
 
         print(f"⚠️ Validation failed: {reason}")
+        last_failure = reason
         if attempt >= MAX_GENERATION_RETRIES:
             print(f"❌ MCQ generation failed after {MAX_GENERATION_RETRIES} retries: {reason}")
             return None
@@ -1232,6 +1377,16 @@ def validate_case_scenario(data):
             return False, f"Question {i + 1} missing: {missing}"
         if not isinstance(q["options"], list) or len(q["options"]) != 4:
             return False, f"Question {i + 1} must have exactly 4 options"
+        ok, reason = check_single_question(q.get("question", ""))
+        if not ok:
+            return False, f"Question {i + 1}: {reason}"
+        correct = str(q.get("correct_answer", "")).strip().upper()
+        if correct not in {"A", "B", "C", "D"}:
+            return False, f"Question {i + 1} invalid correct_answer: '{correct}'"
+        # STRICT: the computed answer must appear in one of the four options.
+        bug, detail = detect_closest_option_bug(q)
+        if bug:
+            return False, f"Question {i + 1}: {detail}"
 
     return True, "valid"
 
@@ -1296,40 +1451,76 @@ def generate_case_scenario_mcqs(level, subject, chapter_name,
         topic_name=metadata.get("topic_name", selected_topic["name"])
     )
 
-    # ── 5. Call LLM ──────────────────────────────────────────────────────────
+    # ── 5. Call LLM (with corrective retry on parse/validation failure) ───────
     llm, config = get_llm_for_case_scenario(subject)
     print(f"\n🤖 LLM: {config['model']} | temp={config['temperature']} | max_tokens={CASE_SCENARIO_MAX_TOKENS}")
     print(f"\n⏳ Step 4: Generating case scenario (may take 60–120 s)...")
 
-    try:
-        response = llm.invoke(prompt)
-        response_text = response.content if hasattr(response, "content") else str(response)
+    base_prompt = prompt
+    last_failure = None
+    case_data = None
+    for attempt in range(CASE_SCENARIO_MAX_RETRIES + 1):
+        if attempt > 0:
+            print(f"🔄 Retry {attempt}/{CASE_SCENARIO_MAX_RETRIES} — regenerating with correction...")
+            # Feed the specific failure back so the model fixes it instead of
+            # blindly repeating the same broken case scenario.
+            prompt = base_prompt + build_retry_correction(last_failure)
 
-        usage = extract_token_usage(response)
-        if usage:
-            print(f"📊 Token usage: input={usage.get('input')}, output={usage.get('output')}, total={usage.get('total')}")
-    except Exception as e:
-        err_type = _classify_llm_error(str(e))
-        if err_type == "quota":
-            print(f"❌ OpenAI quota exhausted — add credits at platform.openai.com/account/billing")
-        elif err_type == "rate_limit":
-            print(f"⏳ Rate limited — case scenario generation aborted (no retry for single-call)")
-        else:
-            print(f"❌ LLM Error: {e}")
-        return None
+        try:
+            response = llm.invoke(prompt)
+            response_text = response.content if hasattr(response, "content") else str(response)
 
-    # ── 6. Parse & validate ───────────────────────────────────────────────────
-    print(f"\n📝 Step 5: Parsing response...")
-    case_data = parse_case_scenario_response(response_text)
+            usage = extract_token_usage(response)
+            if usage:
+                print(f"📊 Token usage: input={usage.get('input')}, output={usage.get('output')}, total={usage.get('total')}")
+        except Exception as e:
+            err_type = _classify_llm_error(str(e))
+            if err_type == "quota":
+                print(f"❌ OpenAI quota exhausted — add credits at platform.openai.com/account/billing")
+                return None
+            if err_type == "rate_limit":
+                wait = 15 * (attempt + 1)
+                print(f"⏳ Rate limited — waiting {wait}s before retry {attempt + 1}/{CASE_SCENARIO_MAX_RETRIES}...")
+                time.sleep(wait)
+            else:
+                print(f"❌ LLM Error: {e}")
+            if attempt >= CASE_SCENARIO_MAX_RETRIES:
+                return None
+            continue
+
+        # ── 6. Parse & validate ───────────────────────────────────────────────
+        print(f"\n📝 Step 5: Parsing response (attempt {attempt + 1})...")
+        parsed = parse_case_scenario_response(response_text)
+
+        if not parsed:
+            print("❌ Failed to parse case scenario response")
+            last_failure = "Response was not valid JSON. Return ONLY a single valid JSON object."
+            if attempt >= CASE_SCENARIO_MAX_RETRIES:
+                print(f"   Response (first 500 chars): {response_text[:500]}")
+                return None
+            continue
+
+        # Auto-correct each question's answer BEFORE validating (mirror the
+        # single-MCQ flow), so label/letter mismatches are fixed rather than
+        # rejected, and the strict answer-in-options gate judges the fixed form.
+        if isinstance(parsed.get("questions"), list):
+            for q in parsed["questions"]:
+                if isinstance(q, dict):
+                    strip_embedded_options(q)
+                    try_autocorrect_answer(q)
+
+        is_valid, reason = validate_case_scenario(parsed)
+        if is_valid:
+            case_data = parsed
+            break
+
+        print(f"⚠️ Validation failed: {reason}")
+        last_failure = reason
+        if attempt >= CASE_SCENARIO_MAX_RETRIES:
+            print(f"❌ Case scenario generation failed after {CASE_SCENARIO_MAX_RETRIES} retries: {reason}")
+            return None
 
     if not case_data:
-        print("❌ Failed to parse case scenario response")
-        print(f"   Response (first 500 chars): {response_text[:500]}")
-        return None
-
-    is_valid, reason = validate_case_scenario(case_data)
-    if not is_valid:
-        print(f"❌ Validation failed: {reason}")
         return None
 
     # ── 7. Normalize options and auto-correct answers in each question ───────────
